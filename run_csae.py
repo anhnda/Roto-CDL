@@ -243,7 +243,7 @@ if __name__ == "__main__":
     # Target: 5-10 active neurons per sample (out of 4096)
     LAMBDA_L1 = 0.0  # Strong sparsity to get ~10 active neurons
     LAMBDA_LAT = 0.00  # Prevent blob-like activations
-    LAMBDA_DIVERSITY = 50.0  # VERY HIGH - force classes to use different features (Div → 0)
+    LAMBDA_DIVERSITY = 10.0  # VERY HIGH - force classes to use different features (Div → 0)
 
     LR = 3e-4
     EPOCHS = 10  # Increased to 20 for two-stage   training
