@@ -241,12 +241,12 @@ if __name__ == "__main__":
 
     # Hyperparameters for EXTREMELY sparse class-discriminative autoencoder
     # Target: 5-10 active neurons per sample (out of 4096)
-    LAMBDA_L1 = 0.1  # Strong sparsity to get ~10 active neurons
-    LAMBDA_LAT = 0.02  # Prevent blob-like activations
+    LAMBDA_L1 = 0.0  # Strong sparsity to get ~10 active neurons
+    LAMBDA_LAT = 0.00  # Prevent blob-like activations
     LAMBDA_DIVERSITY = 50.0  # VERY HIGH - force classes to use different features (Div → 0)
 
     LR = 3e-4
-    EPOCHS = 20  # Increased to 20 for two-stage   training
+    EPOCHS = 10  # Increased to 20 for two-stage   training
 
     print(f"Training Configuration:")
     print(f"  Input Channels: {INPUT_CHANNELS}")
@@ -372,8 +372,8 @@ if __name__ == "__main__":
             # Print progress every 20 batches
             if batch_idx % 20 == 0:
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
-                      f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
-                      f"Div: {loss_div.item():.4f} | Act%: {active_pct_value:.2f}%", end="")
+                      f"Loss: {loss.item():.6f} | Recon: {loss_recon.item():.6f} | "
+                      f"Div: {loss_div.item():.6f} | Act%: {active_pct_value:.6f}%", end="")
 
         # Epoch summary
         avg_total = epoch_total_loss / n_batches
