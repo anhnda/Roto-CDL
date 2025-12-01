@@ -219,8 +219,8 @@ if __name__ == "__main__":
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 4096
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
-    LAMBDA_L1 = 0.001  # Very small - let model learn reconstruction first
-    LAMBDA_LAT = 0.02  # Lateral inhibition to prevent blobs
+    LAMBDA_L1 = 0.0  # DISABLED - focus purely on reconstruction to debug
+    LAMBDA_LAT = 0.0  # DISABLED - testing if lateral inhibition causes dead neurons
     LR = 3e-4
     EPOCHS = 20
 
@@ -243,9 +243,9 @@ if __name__ == "__main__":
         kernel_size=KERNEL_SIZE
     ).to(device)
 
-    # Initialize encoder bias to small positive value to prevent dead neurons
+    # Initialize encoder bias to very large positive value to force activations
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(0.01)
+        csae_model.encoder_bias.data.fill_(1.0)  # Increased to 1.0 for debugging
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
