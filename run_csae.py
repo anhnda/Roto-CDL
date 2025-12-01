@@ -243,7 +243,7 @@ if __name__ == "__main__":
     # Target: 5-10% active neurons (25-50 out of 512)
     LAMBDA_L1 = 0.01  # L1 sparsity penalty (increased from 1e-3 to control 43% activation)
     LAMBDA_LAT = 0.00  # Prevent blob-like activations
-    LAMBDA_DIVERSITY = 0.1  # 
+    LAMBDA_DIVERSITY = 10  # 
 
     LR = 3e-4  # Reduced from 1e-3 for stability
     WEIGHT_DECAY = 1e-5  # Add weight decay to prevent explosion
