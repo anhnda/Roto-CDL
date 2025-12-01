@@ -233,9 +233,9 @@ if __name__ == "__main__":
     print("\nSetting up ConvSAE training...")
 
     # Hyperparameters
-    BATCH_SIZE = 256
+    BATCH_SIZE = 512
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
-    HIDDEN_DIM = 4096
+    HIDDEN_DIM = 512
     KERNEL_SIZE = 3  # 1x1 convolution for spatial sparsity
     NUM_CLASSES = 10  # Imagenette has 10 classes
 
