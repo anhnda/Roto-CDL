@@ -201,6 +201,10 @@ if __name__ == "__main__":
     X = X / scale_factor
     # X = X * 10  # REMOVED: Keeping data in [0, 1] to avoid huge MSE loss
 
+    # Verify data range
+    print(f"Data range after normalization: [{X.min():.4f}, {X.max():.4f}]")
+    print(f"Data mean: {X.mean():.4f}, std: {X.std():.4f}")
+
     # OPTIONAL: BLURRING
     # blur = transforms.GaussianBlur(kernel_size=3, sigma=0.5)
     # X = blur(X)
