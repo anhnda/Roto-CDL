@@ -247,7 +247,7 @@ if __name__ == "__main__":
     LAMBDA_DIVERSITY = 0.5  # Auto-disabled until 5% neurons active (see ClassDiversityLoss)
 
     LR = 3e-4
-    EPOCHS = 20  # Increased to 20 for two-stage training
+    EPOCHS = 20  # Increased to 20 for two-stage   training
 
     print(f"Training Configuration:")
     print(f"  Input Channels: {INPUT_CHANNELS}")
