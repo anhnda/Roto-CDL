@@ -16,9 +16,10 @@ class ConvSAE(nn.Module):
         self.encoder = nn.Conv2d(in_channels, hidden_dim, kernel_size, padding=padding)
         self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size, padding=padding)
         self.encoder_bias = nn.Parameter(torch.zeros(hidden_dim))
-        nn.init.constant_(self.encoder_bias, 0.5)
-        # Initialize encoder with   Kaiming
-        nn.init.kaiming_uniform_(self.encoder.weight)
+        nn.init.constant_(self.encoder_bias, 2.0)  # Increased from 0.5 to prevent encoder collapse
+        # Initialize encoder with POSITIVE weights to prevent ReLU death
+        # Kaiming can produce negative weights, causing all activations to die
+        nn.init.uniform_(self.encoder.weight, a=0.0, b=0.1)
 
         # Initialize decoder with positive weights (compatible with non-negativity constraint)
         # Use uniform distribution in [0, 0.02] to ensure all weights start positive

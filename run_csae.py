@@ -269,10 +269,10 @@ if __name__ == "__main__":
         kernel_size=KERNEL_SIZE
     ).to(device)
 
-    # Initialize encoder bias to small positive value to encourage activations
-    # Too high (>1.0) can cause activation explosion
+    # Initialize encoder bias to overcome negative encoder outputs
+    # This prevents ReLU death where all activations become zero
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(0.1)  # Small positive bias
+        csae_model.encoder_bias.data.fill_(2.0)  # Large enough to keep neurons alive
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
@@ -369,11 +369,18 @@ if __name__ == "__main__":
                 epoch_active_pct += active_pct_value
                 n_batches += 1
 
-            # Print progress every 20 batches
+            # Print progress every 20 batches with encoder health diagnostic
             if batch_idx % 20 == 0:
+                # Diagnostic: Check pre-ReLU activation mean
+                with torch.no_grad():
+                    pre_relu = csae_model.encoder(batch_acts) + csae_model.encoder_bias.view(1, -1, 1, 1)
+                    pre_relu_mean = pre_relu.mean().item()
+                    pre_relu_min = pre_relu.min().item()
+
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.6f} | Recon: {loss_recon.item():.6f} | "
-                      f"Div: {loss_div.item():.6f} | Act%: {active_pct_value:.6f}%", end="")
+                      f"Div: {loss_div.item():.6f} | Act%: {active_pct_value:.6f}% | "
+                      f"PreReLU: {pre_relu_mean:.3f} (min: {pre_relu_min:.3f})", end="")
 
         # Epoch summary
         avg_total = epoch_total_loss / n_batches
