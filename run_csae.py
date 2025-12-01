@@ -236,7 +236,7 @@ if __name__ == "__main__":
     BATCH_SIZE = 256
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 4096
-    KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
+    KERNEL_SIZE = 3  # 1x1 convolution for spatial sparsity
     NUM_CLASSES = 10  # Imagenette has 10 classes
 
     # Hyperparameters for EXTREMELY sparse class-discriminative autoencoder
@@ -402,12 +402,12 @@ if __name__ == "__main__":
             recon_warning = " ✓ Good reconstruction"
 
         print(f"\n[Epoch {epoch+1}/{EPOCHS}] "
-              f"Avg Loss: {avg_total:.4f} | "
+              f"Avg Loss: {avg_total:.6f} | "
               f"Recon: {avg_recon:.4f}{recon_warning} | "
-              f"L1: {avg_l1:.4f} | "
-              f"Lat: {avg_lat:.4f} | "
-              f"Div: {avg_div:.4f} | "
-              f"Active: {avg_active:.2f}%{sparsity_warning}")
+              f"L1: {avg_l1:.6f} | "
+              f"Lat: {avg_lat:.6f} | "
+              f"Div: {avg_div:.6f} | "
+              f"Active: {avg_active:.6f}%{sparsity_warning}")
         print("-" * 70)
 
     print("=" * 70)
