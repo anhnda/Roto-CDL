@@ -211,7 +211,7 @@ if __name__ == "__main__":
     print("\nSetting up ConvSAE training...")
 
     # Hyperparameters
-    BATCH_SIZE = 512
+    BATCH_SIZE = 256
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 4096
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
