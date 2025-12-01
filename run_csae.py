@@ -289,6 +289,7 @@ if __name__ == "__main__":
         "l0_loss": [],
         "lateral_loss": [],
         "diversity_loss": [],
+        "active_loss": [],
         "active_neurons_pct": []
     }
 
@@ -304,6 +305,7 @@ if __name__ == "__main__":
         epoch_l1_loss = 0
         epoch_lat_loss = 0
         epoch_div_loss = 0
+        epoch_active_loss = 0
         epoch_active_pct = 0
         n_batches = 0
 
@@ -334,8 +336,15 @@ if __name__ == "__main__":
             # Class diversity loss (encourages class-specific features)
             loss_div = diversity_loss(acts, batch_labels)
 
-            # Combined loss with class-discriminative term
-            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_LAT * loss_lat) + (LAMBDA_DIVERSITY * loss_div)
+            # Active neuron encouragement (penalize too few active neurons)
+            active_pct = (acts > 0).float().mean()  # Proportion active (0-1)
+            target_active_pct = 0.10  # Target 10% active neurons
+            loss_active = (target_active_pct - active_pct).clamp(min=0)  # Penalty when below target
+
+            # Combined loss with class-discriminative term + active neuron bonus
+            LAMBDA_ACTIVE = 10.0  # Encourage 10% active neurons
+            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_LAT * loss_lat) + \
+                   (LAMBDA_DIVERSITY * loss_div) + (LAMBDA_ACTIVE * loss_active)
 
             # Backward pass
             loss.backward()
@@ -349,7 +358,7 @@ if __name__ == "__main__":
             # Collect metrics
             with torch.no_grad():
                 active_mask = (acts > 0).float()
-                active_pct = active_mask.mean().item() * 100
+                active_pct_value = active_mask.mean().item() * 100
 
                 logs["total_loss"].append(loss.item())
                 logs["recon_loss"].append(loss_recon.item())
@@ -357,22 +366,23 @@ if __name__ == "__main__":
                 logs["l0_loss"].append(l0_approx.item())
                 logs["lateral_loss"].append(loss_lat.item())
                 logs["diversity_loss"].append(loss_div.item())
-                logs["active_neurons_pct"].append(active_pct)
+                logs["active_loss"].append(loss_active.item())
+                logs["active_neurons_pct"].append(active_pct_value)
 
                 epoch_total_loss += loss.item()
                 epoch_recon_loss += loss_recon.item()
                 epoch_l1_loss += loss_l1.item()
                 epoch_lat_loss += loss_lat.item()
                 epoch_div_loss += loss_div.item()
-                epoch_active_pct += active_pct
+                epoch_active_loss += loss_active.item()
+                epoch_active_pct += active_pct_value
                 n_batches += 1
 
             # Print progress every 20 batches
             if batch_idx % 20 == 0:
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
-                      f"L1: {loss_l1.item():.4f} | Lat: {loss_lat.item():.4f} | "
-                      f"Div: {loss_div.item():.4f} | Active: {active_pct:.2f}%", end="")
+                      f"Div: {loss_div.item():.4f} | Act%: {active_pct_value:.2f}%", end="")
 
         # Epoch summary
         avg_total = epoch_total_loss / n_batches
@@ -380,6 +390,7 @@ if __name__ == "__main__":
         avg_l1 = epoch_l1_loss / n_batches
         avg_lat = epoch_lat_loss / n_batches
         avg_div = epoch_div_loss / n_batches
+        avg_active_loss = epoch_active_loss / n_batches
         avg_active = epoch_active_pct / n_batches
 
         # Sparsity warning
