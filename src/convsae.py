@@ -77,27 +77,18 @@ class ClassDiversityLoss(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-    def forward(self, feature_acts, labels, min_active_pct=5.0):
+    def forward(self, feature_acts, labels):
         """
         Args:
             feature_acts: [B, C, H, W] - sparse feature activations
             labels: [B] - class labels (0 to num_classes-1)
-            min_active_pct: float - minimum % of active neurons required to apply diversity loss
-                          (prevents penalizing dead models)
 
         Returns:
             diversity_loss: scalar - penalty for feature overlap between classes
-                          (higher = more overlap, lower = more class-specific)
+                          (0 = classes use different features, 1 = classes use same features)
         """
         B, C, H, W = feature_acts.shape
         device = feature_acts.device
-
-        # Check if enough neurons are active
-        # Only apply diversity loss if model has learned to activate neurons
-        active_pct = (feature_acts > 0).float().mean().item() * 100
-        if active_pct < min_active_pct:
-            # Model is too dead - return zero loss to avoid interference
-            return torch.tensor(0.0, device=device, requires_grad=True)
 
         # Compute per-class feature activation strength
         # class_features[c, i] = average activation of feature i for class c
