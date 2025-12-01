@@ -239,10 +239,11 @@ if __name__ == "__main__":
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
     NUM_CLASSES = 10  # Imagenette has 10 classes
 
-    # Hyperparameters for class-discriminative sparse autoencoder
-    LAMBDA_L1 = 0.0  # DISABLED - let neurons activate freely
-    LAMBDA_LAT = 0.0  # DISABLED - focus on reconstruction + diversity
-    LAMBDA_DIVERSITY = 5.0  # HIGH - force classes to use different features (→ more neurons)
+    # Hyperparameters for EXTREMELY sparse class-discriminative autoencoder
+    # Target: 5-10 active neurons per sample (out of 4096)
+    LAMBDA_L1 = 0.1  # Strong sparsity to get ~10 active neurons
+    LAMBDA_LAT = 0.02  # Prevent blob-like activations
+    LAMBDA_DIVERSITY = 1.0  # Moderate - ensure different classes use different 10-neuron subsets
 
     LR = 3e-4
     EPOCHS = 20  # Increased to 20 for two-stage   training
@@ -289,7 +290,6 @@ if __name__ == "__main__":
         "l0_loss": [],
         "lateral_loss": [],
         "diversity_loss": [],
-        "active_loss": [],
         "active_neurons_pct": []
     }
 
@@ -305,7 +305,6 @@ if __name__ == "__main__":
         epoch_l1_loss = 0
         epoch_lat_loss = 0
         epoch_div_loss = 0
-        epoch_active_loss = 0
         epoch_active_pct = 0
         n_batches = 0
 
@@ -336,15 +335,9 @@ if __name__ == "__main__":
             # Class diversity loss (encourages class-specific features)
             loss_div = diversity_loss(acts, batch_labels)
 
-            # Active neuron encouragement (penalize too few active neurons)
-            active_pct = (acts > 0).float().mean()  # Proportion active (0-1)
-            target_active_pct = 0.10  # Target 10% active neurons
-            loss_active = (target_active_pct - active_pct).clamp(min=0)  # Penalty when below target
-
-            # Combined loss with class-discriminative term + active neuron bonus
-            LAMBDA_ACTIVE = 10.0  # Encourage 10% active neurons
+            # Combined loss: reconstruction + extreme sparsity + class discrimination
             loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_LAT * loss_lat) + \
-                   (LAMBDA_DIVERSITY * loss_div) + (LAMBDA_ACTIVE * loss_active)
+                   (LAMBDA_DIVERSITY * loss_div)
 
             # Backward pass
             loss.backward()
@@ -366,7 +359,6 @@ if __name__ == "__main__":
                 logs["l0_loss"].append(l0_approx.item())
                 logs["lateral_loss"].append(loss_lat.item())
                 logs["diversity_loss"].append(loss_div.item())
-                logs["active_loss"].append(loss_active.item())
                 logs["active_neurons_pct"].append(active_pct_value)
 
                 epoch_total_loss += loss.item()
@@ -374,7 +366,6 @@ if __name__ == "__main__":
                 epoch_l1_loss += loss_l1.item()
                 epoch_lat_loss += loss_lat.item()
                 epoch_div_loss += loss_div.item()
-                epoch_active_loss += loss_active.item()
                 epoch_active_pct += active_pct_value
                 n_batches += 1
 
@@ -390,17 +381,16 @@ if __name__ == "__main__":
         avg_l1 = epoch_l1_loss / n_batches
         avg_lat = epoch_lat_loss / n_batches
         avg_div = epoch_div_loss / n_batches
-        avg_active_loss = epoch_active_loss / n_batches
         avg_active = epoch_active_pct / n_batches
 
-        # Sparsity warning
+        # Sparsity warning (target: 5-10 neurons out of 4096 = 0.12-0.24%)
         sparsity_warning = ""
-        if avg_active > 10:
+        if avg_active > 1.0:
             sparsity_warning = " ⚠️  WARNING: Too many active neurons! Increase LAMBDA_L1"
-        elif avg_active < 0.5:
+        elif avg_active < 0.05:
             sparsity_warning = " ⚠️  WARNING: Too few active neurons! Model may be dead. Decrease LAMBDA_L1"
-        elif 0.5 <= avg_active <= 10:
-            sparsity_warning = " ✓ Good sparsity level"
+        elif 0.12 <= avg_active <= 0.30:
+            sparsity_warning = " ✓ Good extreme sparsity (5-12 neurons)"
 
         # Reconstruction quality check
         recon_warning = ""
