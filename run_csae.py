@@ -222,7 +222,7 @@ if __name__ == "__main__":
     LAMBDA_L1 = 0.0  # DISABLED - focus purely on reconstruction to debug
     LAMBDA_LAT = 0.0  # DISABLED - testing if lateral inhibition causes dead neurons
     LR = 3e-4
-    EPOCHS = 20
+    EPOCHS = 10
 
     print(f"Training Configuration:")
     print(f"  Input Channels: {INPUT_CHANNELS}")
