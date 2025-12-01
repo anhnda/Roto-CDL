@@ -1,6 +1,6 @@
 from src.activation import ActivationMapCollector
 from src.model import FineTunedModel
-from src.convsae import ConvSAE, LateralInhibitionLoss
+from src.convsae import ConvSAE, LateralInhibitionLoss, ClassDiversityLoss
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -14,10 +14,10 @@ from tqdm import tqdm
 
 def plot_training_logs(logs, save_path='csae_training_logs.png'):
     """
-    Plots a 2x3 Grid of health metrics.
+    Plots a 2x4 Grid of health metrics including class diversity loss.
     """
-    fig, axs = plt.subplots(2, 3, figsize=(18, 8))
-    fig.suptitle('ConvSAE Training Diagnostics', fontsize=16)
+    fig, axs = plt.subplots(2, 4, figsize=(20, 8))
+    fig.suptitle('ConvSAE Training Diagnostics (with Class Diversity)', fontsize=16)
 
     # 1. Reconstruction (Should go down)
     axs[0, 0].plot(logs["recon_loss"], color='blue')
@@ -38,6 +38,12 @@ def plot_training_logs(logs, save_path='csae_training_logs.png'):
     axs[0, 2].axhspan(0.005, 0.10, alpha=0.2, color='green', label='Target (0.5-10%)')
     axs[0, 2].legend()
     axs[0, 2].grid(True, alpha=0.3)
+
+    # 4. Class Diversity Loss (Should go down = more class-specific features)
+    axs[0, 3].plot(logs["diversity_loss"], color='crimson')
+    axs[0, 3].set_title("Class Diversity Loss (Lower = More Class-Specific)")
+    axs[0, 3].set_ylabel("Similarity")
+    axs[0, 3].grid(True, alpha=0.3)
 
     # 5. Lateral Inhibition (Should go down)
     axs[1, 0].plot(logs["lateral_loss"], color='purple')
@@ -62,6 +68,17 @@ def plot_training_logs(logs, save_path='csae_training_logs.png'):
     axs[1, 2].set_title("Total Loss (All Components)")
     axs[1, 2].set_ylabel("Loss")
     axs[1, 2].grid(True, alpha=0.3)
+
+    # 8. Loss Components Breakdown (stacked or comparison)
+    axs[1, 3].plot(logs["recon_loss"], label='Recon', alpha=0.7)
+    axs[1, 3].plot(logs["l1_loss"], label='L1', alpha=0.7)
+    axs[1, 3].plot(logs["lateral_loss"], label='Lateral', alpha=0.7)
+    axs[1, 3].plot(logs["diversity_loss"], label='Diversity', alpha=0.7)
+    axs[1, 3].set_title("Loss Components Comparison")
+    axs[1, 3].set_ylabel("Loss Value")
+    axs[1, 3].legend()
+    axs[1, 3].grid(True, alpha=0.3)
+    axs[1, 3].set_yscale('log')  # Log scale to see all components
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -182,10 +199,11 @@ if __name__ == "__main__":
 
     collector = ActivationMapCollector(model, target_layer, device=device)
 
-    # Collect data
+    # Collect data with class labels
     print("Collecting Activation Maps...")
-    X = collector.collect_maps(data_loader, output_tensor=True, device=device)
+    X, Y = collector.collect_maps(data_loader, output_tensor=True, device=device, return_labels=True)
     print(f"Collected {len(X)} activation maps with shape {X.shape}")
+    print(f"Labels shape: {Y.shape}, unique classes: {Y.unique().tolist()}")
 
     # ========================================
     # 3. ROBUST NORMALIZATION
@@ -219,8 +237,10 @@ if __name__ == "__main__":
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 4096
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
-    LAMBDA_L1 = 0.0  # DISABLED - focus purely on reconstruction to debug
-    LAMBDA_LAT = 0.0  # DISABLED - testing if lateral inhibition causes dead neurons
+    NUM_CLASSES = 10  # Imagenette has 10 classes
+    LAMBDA_L1 = 0.001  # L1 sparsity penalty
+    LAMBDA_LAT = 0.01  # Lateral inhibition to prevent blobs
+    LAMBDA_DIVERSITY = 0.1  # Class-discriminative loss (encourages class-specific features)
     LR = 3e-4
     EPOCHS = 10
 
@@ -228,8 +248,10 @@ if __name__ == "__main__":
     print(f"  Input Channels: {INPUT_CHANNELS}")
     print(f"  Hidden Dim: {HIDDEN_DIM}")
     print(f"  Kernel Size: {KERNEL_SIZE}")
+    print(f"  Num Classes: {NUM_CLASSES}")
     print(f"  Lambda L1: {LAMBDA_L1}")
     print(f"  Lambda Lateral: {LAMBDA_LAT}")
+    print(f"  Lambda Diversity: {LAMBDA_DIVERSITY}")
     print(f"  Learning Rate: {LR}")
     print(f"  Epochs: {EPOCHS}")
     print(f"  Batch Size: {BATCH_SIZE}")
@@ -249,9 +271,10 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
+    diversity_loss = ClassDiversityLoss(num_classes=NUM_CLASSES).to(device)
 
-    # Create DataLoader for training
-    dataset = TensorDataset(X)
+    # Create DataLoader for training (include labels)
+    dataset = TensorDataset(X, Y)
     train_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
     # Logging dictionary
@@ -261,6 +284,7 @@ if __name__ == "__main__":
         "l1_loss": [],
         "l0_loss": [],
         "lateral_loss": [],
+        "diversity_loss": [],
         "active_neurons_pct": []
     }
 
@@ -275,11 +299,13 @@ if __name__ == "__main__":
         epoch_recon_loss = 0
         epoch_l1_loss = 0
         epoch_lat_loss = 0
+        epoch_div_loss = 0
         epoch_active_pct = 0
         n_batches = 0
 
-        for batch_idx, (batch_acts,) in enumerate(train_loader):
+        for batch_idx, (batch_acts, batch_labels) in enumerate(train_loader):
             batch_acts = batch_acts.to(device)
+            batch_labels = batch_labels.to(device)
 
             optimizer.zero_grad()
 
@@ -301,9 +327,11 @@ if __name__ == "__main__":
             # Lateral inhibition
             loss_lat = lat_inhib_loss(acts)
 
-            # Combined loss - removed L0 penalty to prevent dead neurons
-            # Focus on reconstruction + L1 sparsity only
-            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_LAT * loss_lat)
+            # Class diversity loss (encourages class-specific features)
+            loss_div = diversity_loss(acts, batch_labels)
+
+            # Combined loss with class-discriminative term
+            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_LAT * loss_lat) + (LAMBDA_DIVERSITY * loss_div)
 
             # Backward pass
             loss.backward()
@@ -320,12 +348,14 @@ if __name__ == "__main__":
                 logs["l1_loss"].append(loss_l1.item())
                 logs["l0_loss"].append(l0_approx.item())
                 logs["lateral_loss"].append(loss_lat.item())
+                logs["diversity_loss"].append(loss_div.item())
                 logs["active_neurons_pct"].append(active_pct)
 
                 epoch_total_loss += loss.item()
                 epoch_recon_loss += loss_recon.item()
                 epoch_l1_loss += loss_l1.item()
                 epoch_lat_loss += loss_lat.item()
+                epoch_div_loss += loss_div.item()
                 epoch_active_pct += active_pct
                 n_batches += 1
 
@@ -334,13 +364,14 @@ if __name__ == "__main__":
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
                       f"L1: {loss_l1.item():.4f} | Lat: {loss_lat.item():.4f} | "
-                      f"Active: {active_pct:.2f}%", end="")
+                      f"Div: {loss_div.item():.4f} | Active: {active_pct:.2f}%", end="")
 
         # Epoch summary
         avg_total = epoch_total_loss / n_batches
         avg_recon = epoch_recon_loss / n_batches
         avg_l1 = epoch_l1_loss / n_batches
         avg_lat = epoch_lat_loss / n_batches
+        avg_div = epoch_div_loss / n_batches
         avg_active = epoch_active_pct / n_batches
 
         # Sparsity warning
@@ -366,6 +397,7 @@ if __name__ == "__main__":
               f"Recon: {avg_recon:.4f}{recon_warning} | "
               f"L1: {avg_l1:.4f} | "
               f"Lat: {avg_lat:.4f} | "
+              f"Div: {avg_div:.4f} | "
               f"Active: {avg_active:.2f}%{sparsity_warning}")
         print("-" * 70)
 
@@ -391,8 +423,10 @@ if __name__ == "__main__":
             'input_channels': INPUT_CHANNELS,
             'hidden_dim': HIDDEN_DIM,
             'kernel_size': KERNEL_SIZE,
+            'num_classes': NUM_CLASSES,
             'lambda_l1': LAMBDA_L1,
             'lambda_lat': LAMBDA_LAT,
+            'lambda_diversity': LAMBDA_DIVERSITY,
             'lr': LR,
             'epochs': EPOCHS,
             'batch_size': BATCH_SIZE,
@@ -402,6 +436,7 @@ if __name__ == "__main__":
             'avg_recon_loss': avg_recon,
             'avg_l1_loss': avg_l1,
             'avg_lat_loss': avg_lat,
+            'avg_diversity_loss': avg_div,
             'avg_active_pct': avg_active,
         }
     }

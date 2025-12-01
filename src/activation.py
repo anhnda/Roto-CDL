@@ -22,31 +22,46 @@ class ActivationMapCollector:
         self.top_k_percent = top_k_percent
         self.gradcam = GradCAM(model, target_layer)
     
-    def collect_maps(self, data_loader: DataLoader, 
-                     use_true_labels: bool = True, output_tensor=True, device=None) -> List[torch.Tensor]:
-        """Collect activation maps from dataset."""
+    def collect_maps(self, data_loader: DataLoader,
+                     use_true_labels: bool = True, output_tensor=True, device=None,
+                     return_labels: bool = False) -> List[torch.Tensor]:
+        """
+        Collect activation maps from dataset.
+
+        Args:
+            return_labels: If True, returns (maps, labels) tuple where labels indicate
+                          which class each activation map came from
+        """
         maps_list = []
-        
+        labels_list = []
+
         for image_tensor, label in tqdm(data_loader, desc="Collecting activation maps"):
             image_tensor = image_tensor.to(self.device)
             class_idx = label.item() if use_true_labels else None
-            
+
             # Compute GradCAM weights
             weights, _, _ = self.gradcam.forward(image_tensor, class_idx=class_idx)
-            
+
             # Get activations (stored by hook)
             activations = self.gradcam.activations.squeeze().cpu()  # [C, H, W]
-            
+
             # Find top-k% channels by cumulative weight
             top_channel_indices = self._get_top_k_channels(weights.cpu().numpy())
-            
+
             # Collect maps from top channels
             for idx in top_channel_indices:
                 maps_list.append(activations[idx])
+                if return_labels:
+                    labels_list.append(class_idx)
+
         if output_tensor:
             maps_list = torch.stack(maps_list).to(device)
             maps_list = maps_list.unsqueeze(1)
-        
+            if return_labels:
+                labels_list = torch.tensor(labels_list, dtype=torch.long, device=device)
+
+        if return_labels:
+            return maps_list, labels_list
         return maps_list
     
     def _get_top_k_channels(self, weights: np.ndarray) -> np.ndarray:

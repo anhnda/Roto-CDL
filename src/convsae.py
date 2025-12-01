@@ -60,6 +60,60 @@ class LateralInhibitionLoss(nn.Module):
         loss = (feature_map * neighbor_sum).mean()
         return loss
 
+
+class ClassDiversityLoss(nn.Module):
+    """
+    Encourages different classes to activate different features (class-discriminative learning).
+
+    This loss promotes orthogonality between class-specific feature activations while
+    allowing some shared features for common patterns.
+
+    The loss works by:
+    1. Computing average feature activation for each class
+    2. Measuring similarity between different classes' feature usage
+    3. Penalizing high similarity (encourages class-specific features)
+    """
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.num_classes = num_classes
+
+    def forward(self, feature_acts, labels):
+        """
+        Args:
+            feature_acts: [B, C, H, W] - sparse feature activations
+            labels: [B] - class labels (0 to num_classes-1)
+
+        Returns:
+            diversity_loss: scalar - penalty for feature overlap between classes
+                          (higher = more overlap, lower = more class-specific)
+        """
+        B, C, H, W = feature_acts.shape
+        device = feature_acts.device
+
+        # Compute per-class feature activation strength
+        # class_features[c, i] = average activation of feature i for class c
+        class_features = torch.zeros(self.num_classes, C, device=device)
+
+        for c in range(self.num_classes):
+            mask = (labels == c)
+            if mask.sum() > 0:
+                # Average activation across spatial dims and samples
+                class_acts = feature_acts[mask].mean(dim=(0, 2, 3))  # [C]
+                class_features[c] = class_acts
+
+        # Normalize feature vectors (L2 normalization)
+        class_features_norm = F.normalize(class_features, dim=1, p=2, eps=1e-8)  # [num_classes, C]
+
+        # Compute pairwise cosine similarity between classes
+        similarity_matrix = torch.mm(class_features_norm, class_features_norm.t())  # [num_classes, num_classes]
+
+        # Penalize off-diagonal elements (high similarity between different classes)
+        # We want different classes to have LOW similarity (orthogonal features)
+        mask = torch.ones_like(similarity_matrix) - torch.eye(self.num_classes, device=device)
+        diversity_loss = (similarity_matrix.abs() * mask).sum() / (self.num_classes * (self.num_classes - 1))
+
+        return diversity_loss
+
 # ==========================================
 # 2. Training with Detailed Logging
 # ==========================================
