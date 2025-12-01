@@ -17,7 +17,7 @@ class ConvSAE(nn.Module):
         self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size, padding=padding)
         self.encoder_bias = nn.Parameter(torch.zeros(hidden_dim))
         nn.init.constant_(self.encoder_bias, 0.5)
-        # Initialize encoder with Kaiming
+        # Initialize encoder with   Kaiming
         nn.init.kaiming_uniform_(self.encoder.weight)
 
         # Initialize decoder with positive weights (compatible with non-negativity constraint)
