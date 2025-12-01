@@ -35,7 +35,7 @@ def plot_training_logs(logs, save_path='csae_training_logs.png'):
     axs[0, 2].plot(logs["l0_loss"], color='orange')
     axs[0, 2].set_title("L0 Approximation (Target Sparsity)")
     axs[0, 2].set_ylabel("Proportion Active")
-    axs[0, 2].axhspan(0.05, 0.15, alpha=0.2, color='green', label='Target (5-15%)')
+    axs[0, 2].axhspan(0.005, 0.10, alpha=0.2, color='green', label='Target (0.5-10%)')
     axs[0, 2].legend()
     axs[0, 2].grid(True, alpha=0.3)
 
@@ -345,11 +345,11 @@ if __name__ == "__main__":
 
         # Sparsity warning
         sparsity_warning = ""
-        if avg_active > 30:
+        if avg_active > 10:
             sparsity_warning = " ⚠️  WARNING: Too many active neurons! Increase LAMBDA_L1"
-        elif avg_active < 2:
+        elif avg_active < 0.5:
             sparsity_warning = " ⚠️  WARNING: Too few active neurons! Model may be dead. Decrease LAMBDA_L1"
-        elif 5 <= avg_active <= 15:
+        elif 0.5 <= avg_active <= 10:
             sparsity_warning = " ✓ Good sparsity level"
 
         # Reconstruction quality check
