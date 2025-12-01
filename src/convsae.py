@@ -16,7 +16,7 @@ class ConvSAE(nn.Module):
         self.encoder = nn.Conv2d(in_channels, hidden_dim, kernel_size, padding=padding)
         self.decoder = nn.Conv2d(hidden_dim, in_channels, kernel_size, padding=padding)
         self.encoder_bias = nn.Parameter(torch.zeros(hidden_dim))
-        nn.init.constant_(self.encoder_bias, 5.0)  # STRONG positive bias to prevent encoder collapse
+        nn.init.constant_(self.encoder_bias, 2.0)  # Positive bias to prevent encoder collapse (reduced from 5.0 with encoder normalization)
         # Initialize encoder with POSITIVE weights to prevent ReLU death
         # Kaiming can produce negative weights, causing all activations to die
         nn.init.uniform_(self.encoder.weight, a=0.0, b=0.1)
@@ -45,6 +45,18 @@ class ConvSAE(nn.Module):
         norms = weight.norm(p=2, dim=(0, 2, 3), keepdim=True)
         norms = torch.clamp(norms, min=1e-8)
         self.decoder.weight.data = weight / norms
+
+    @torch.no_grad()
+    def normalize_encoder_weights(self):
+        """
+        Normalize encoder weights to prevent explosion.
+        Applies L2 normalization per output channel.
+        """
+        weight = self.encoder.weight
+        # L2 normalization per output channel
+        norms = weight.norm(p=2, dim=(1, 2, 3), keepdim=True)
+        norms = torch.clamp(norms, min=1e-8)
+        self.encoder.weight.data = weight / norms
 
 class LateralInhibitionLoss(nn.Module):
     def __init__(self):

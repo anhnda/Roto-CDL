@@ -236,17 +236,18 @@ if __name__ == "__main__":
     BATCH_SIZE = 512
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 512
-    KERNEL_SIZE = 3  # 1x1 convolution for spatial sparsity
+    KERNEL_SIZE = 3  # 3x3 convolution for spatial context
     NUM_CLASSES = 10  # Imagenette has 10 classes
 
-    # Hyperparameters for EXTREMELY sparse class-discriminative autoencoder
-    # Target: 5-10 active neurons per sample (out of 4096)
-    LAMBDA_L1 = 1e-3  # Strong sparsity to get ~10 active neurons
+    # Hyperparameters for sparse autoencoder
+    # Target: 5-10% active neurons (25-50 out of 512)
+    LAMBDA_L1 = 0.01  # L1 sparsity penalty (increased from 1e-3 to control 43% activation)
     LAMBDA_LAT = 0.00  # Prevent blob-like activations
     LAMBDA_DIVERSITY = 0.0  # DISABLED - was causing dead neurons (diversity loss dominated training)
 
-    LR = 1e-3
-    EPOCHS = 10  # Increased to 20 for two-stage   training
+    LR = 3e-4  # Reduced from 1e-3 for stability
+    WEIGHT_DECAY = 1e-5  # Add weight decay to prevent explosion
+    EPOCHS = 10
 
     print(f"Training Configuration:")
     print(f"  Input Channels: {INPUT_CHANNELS}")
@@ -257,6 +258,7 @@ if __name__ == "__main__":
     print(f"  Lambda Lateral: {LAMBDA_LAT}")
     print(f"  Lambda Diversity: {LAMBDA_DIVERSITY}")
     print(f"  Learning Rate: {LR}")
+    print(f"  Weight Decay: {WEIGHT_DECAY}")
     print(f"  Epochs: {EPOCHS}")
     print(f"  Batch Size: {BATCH_SIZE}")
 
@@ -270,11 +272,11 @@ if __name__ == "__main__":
     ).to(device)
 
     # Initialize encoder bias to overcome negative encoder outputs
-    # This prevents ReLU death where all activations become zero
+    # With encoder weight normalization, bias = 2.0 is sufficient
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(5.0)  # INCREASED from 2.0 - strong positive bias to prevent ReLU death
+        csae_model.encoder_bias.data.fill_(2.0)
 
-    optimizer = optim.Adam(csae_model.parameters(), lr=LR)
+    optimizer = optim.Adam(csae_model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
     diversity_loss = ClassDiversityLoss(num_classes=NUM_CLASSES).to(device)
 
@@ -346,6 +348,9 @@ if __name__ == "__main__":
             torch.nn.utils.clip_grad_norm_(csae_model.parameters(), max_norm=1.0)
 
             optimizer.step()
+
+            # Normalize both encoder and decoder weights for stability
+            csae_model.normalize_encoder_weights()
             csae_model.normalize_decoder_weights()
 
             # Collect metrics
