@@ -238,11 +238,16 @@ if __name__ == "__main__":
     HIDDEN_DIM = 4096
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
     NUM_CLASSES = 10  # Imagenette has 10 classes
-    LAMBDA_L1 = 0.001  # L1 sparsity penalty
-    LAMBDA_LAT = 0.01  # Lateral inhibition to prevent blobs
-    LAMBDA_DIVERSITY = 0.1  # Class-discriminative loss (encourages class-specific features)
+
+    # Two-stage training strategy:
+    # Stage 1 (epochs 0-5): Wake up neurons - minimal sparsity
+    # Stage 2 (epochs 6+): Enforce sparsity + class diversity
+    LAMBDA_L1 = 0.0  # DISABLED initially - let neurons activate first
+    LAMBDA_LAT = 0.0  # DISABLED initially - focus on reconstruction
+    LAMBDA_DIVERSITY = 0.5  # Auto-disabled until 5% neurons active (see ClassDiversityLoss)
+
     LR = 3e-4
-    EPOCHS = 10
+    EPOCHS = 20  # Increased to 20 for two-stage training
 
     print(f"Training Configuration:")
     print(f"  Input Channels: {INPUT_CHANNELS}")
@@ -266,8 +271,9 @@ if __name__ == "__main__":
     ).to(device)
 
     # Initialize encoder bias to very large positive value to force activations
+    # This helps overcome the ReLU threshold and wake up dead neurons
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(1.0)  # Increased to 1.0 for debugging
+        csae_model.encoder_bias.data.fill_(2.0)  # High initial bias to ensure activation
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
@@ -361,10 +367,11 @@ if __name__ == "__main__":
 
             # Print progress every 20 batches
             if batch_idx % 20 == 0:
+                div_status = f"{loss_div.item():.4f}" if loss_div.item() > 0 else "OFF"
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
                       f"L1: {loss_l1.item():.4f} | Lat: {loss_lat.item():.4f} | "
-                      f"Div: {loss_div.item():.4f} | Active: {active_pct:.2f}%", end="")
+                      f"Div: {div_status} | Active: {active_pct:.2f}%", end="")
 
         # Epoch summary
         avg_total = epoch_total_loss / n_batches
