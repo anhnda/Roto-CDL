@@ -272,7 +272,7 @@ if __name__ == "__main__":
     # Initialize encoder bias to overcome negative encoder outputs
     # This prevents ReLU death where all activations become zero
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(2.0)  # Large enough to keep neurons alive
+        csae_model.encoder_bias.data.fill_(5.0)  # INCREASED from 2.0 - strong positive bias to prevent ReLU death
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
