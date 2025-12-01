@@ -199,7 +199,7 @@ if __name__ == "__main__":
     print(f"Robust Scale Factor: {scale_factor:.4f}")
     X = torch.clamp(X, min=0.0, max=scale_factor)
     X = X / scale_factor
-    X = X * 10
+    # X = X * 10  # REMOVED: Keeping data in [0, 1] to avoid huge MSE loss
 
     # OPTIONAL: BLURRING
     # blur = transforms.GaussianBlur(kernel_size=3, sigma=0.5)
@@ -215,8 +215,8 @@ if __name__ == "__main__":
     INPUT_CHANNELS = X.shape[1]  # Should be 1 (single-channel activation maps)
     HIDDEN_DIM = 4096
     KERNEL_SIZE = 1  # 1x1 convolution for spatial sparsity
-    LAMBDA_L1 = 20  # Increased to push sparsity below 10% (was 10)
-    LAMBDA_LAT = 0.02  # Increased lateral inhibition to prevent blobs
+    LAMBDA_L1 = 1.0  # Reduced from 20 to balance with smaller data range [0,1]
+    LAMBDA_LAT = 0.02  # Lateral inhibition to prevent blobs
     LR = 3e-4
     EPOCHS = 20
 
@@ -294,8 +294,8 @@ if __name__ == "__main__":
             loss_lat = lat_inhib_loss(acts)
 
             # Combined loss with L0 penalty to directly control sparsity
-            # L0 multiplier increased from 10 to 20 for stronger sparsity
-            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_L1 * 20 * l0_approx) + (LAMBDA_LAT * loss_lat)
+            # Using a balanced L0 multiplier (reduced from 20 to 5)
+            loss = loss_recon + (LAMBDA_L1 * loss_l1) + (LAMBDA_L1 * 5 * l0_approx) + (LAMBDA_LAT * loss_lat)
 
             # Backward pass
             loss.backward()
