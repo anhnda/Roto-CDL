@@ -139,22 +139,40 @@ def visualize_learned_features(model, num_features=64, save_path='csae_features.
         axes = axes.flatten()
 
         for i in range(n_features_to_show):
-            # Get the i-th feature's decoder weights across all input channels
-            feature_weights = decoder_weights[:, i, :, :].squeeze(-1).squeeze(-1)  # [in_channels]
+            # Get the i-th feature's decoder weights
+            # Shape: [in_channels, kernel_height, kernel_width]
+            feature_weights = decoder_weights[:, i, :, :]
 
-            # Handle case where in_channels=1 (becomes scalar after squeeze)
-            if feature_weights.dim() == 0:
-                feature_weights = feature_weights.unsqueeze(0)
+            # Check if this is a 1x1 convolution
+            kernel_h, kernel_w = feature_weights.shape[-2:]
 
-            # Reshape to a 2D grid for visualization
-            grid_size = int(np.ceil(np.sqrt(feature_weights.shape[0])))
-            padded = np.zeros(grid_size * grid_size)
-            padded[:feature_weights.shape[0]] = feature_weights.numpy()
-            grid = padded.reshape(grid_size, grid_size)
+            if kernel_h == 1 and kernel_w == 1:
+                # For 1x1 kernels, visualize as a grid of scalars
+                feature_weights = feature_weights.squeeze(-1).squeeze(-1)  # [in_channels]
+
+                # Handle case where in_channels=1 (becomes scalar after squeeze)
+                if feature_weights.dim() == 0:
+                    feature_weights = feature_weights.unsqueeze(0)
+
+                # Reshape to a 2D grid for visualization
+                grid_size = int(np.ceil(np.sqrt(feature_weights.shape[0])))
+                padded = np.zeros(grid_size * grid_size)
+                padded[:feature_weights.shape[0]] = feature_weights.cpu().numpy()
+                grid = padded.reshape(grid_size, grid_size)
+            else:
+                # For larger kernels, visualize the actual spatial kernel
+                # If in_channels > 1, average across channels
+                if feature_weights.shape[0] > 1:
+                    grid = feature_weights.mean(dim=0).cpu().numpy()
+                else:
+                    grid = feature_weights.squeeze(0).cpu().numpy()
 
             # Plot
             vmax = max(abs(grid.min()), abs(grid.max()))
-            im = axes[i].imshow(grid, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+            if vmax > 0:
+                im = axes[i].imshow(grid, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+            else:
+                im = axes[i].imshow(grid, cmap='RdBu_r')
             axes[i].set_title(f'Feature {i}', fontsize=8)
             axes[i].axis('off')
 
