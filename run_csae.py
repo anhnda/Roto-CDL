@@ -270,10 +270,10 @@ if __name__ == "__main__":
         kernel_size=KERNEL_SIZE
     ).to(device)
 
-    # Initialize encoder bias to very large positive value to force activations
-    # This helps overcome the ReLU threshold and wake up dead neurons
+    # Initialize encoder bias to small positive value to encourage activations
+    # Too high (>1.0) can cause activation explosion
     with torch.no_grad():
-        csae_model.encoder_bias.data.fill_(2.0)  # High initial bias to ensure activation
+        csae_model.encoder_bias.data.fill_(0.1)  # Small positive bias
 
     optimizer = optim.Adam(csae_model.parameters(), lr=LR)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
@@ -341,6 +341,10 @@ if __name__ == "__main__":
 
             # Backward pass
             loss.backward()
+
+            # Gradient clipping to prevent explosion
+            torch.nn.utils.clip_grad_norm_(csae_model.parameters(), max_norm=1.0)
+
             optimizer.step()
             csae_model.normalize_decoder_weights()
 
