@@ -548,10 +548,20 @@ class MultiChannelSAEVisualizer:
             axes[i, 2].axis('off')
 
             # Column 3: Masked image (show only salient regions)
-            mask = saliency_norm > 0.5  # Threshold at 50%
-            masked_img = np.array(image).copy()
-            masked_img[~mask] = masked_img[~mask] * 0.3  # Dim non-salient regions
-            axes[i, 3].imshow(masked_img.astype(np.uint8))
+            mask = saliency_norm > 0.5  # Threshold at 50%, shape (224, 224)
+
+            # Resize image to match mask dimensions (224×224)
+            image_resized = Image.fromarray(np.array(image)).resize((224, 224), Image.BILINEAR)
+            masked_img = np.array(image_resized).copy()
+
+            # Apply mask (ensure mask has same shape as image)
+            if len(masked_img.shape) == 3:  # RGB image
+                mask_3d = np.stack([mask, mask, mask], axis=-1)
+                masked_img[~mask_3d] = (masked_img[~mask_3d] * 0.3).astype(np.uint8)
+            else:  # Grayscale
+                masked_img[~mask] = (masked_img[~mask] * 0.3).astype(np.uint8)
+
+            axes[i, 3].imshow(masked_img)
             axes[i, 3].set_title(f"Salient Regions\n(threshold=0.5)", fontsize=9, fontweight='bold')
             axes[i, 3].axis('off')
 

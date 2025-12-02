@@ -11,3 +11,22 @@
 
   # Comprehensive analysis on multiple images
   python visualize_multichannel_sae.py --class_name tench --num_images 10 --grid_view
+
+   # Default view with activation maps
+  python visualize_multichannel_sae.py \
+    --image_path
+  data/imagenette/gas_pump/ILSVRC2012_val_00004452.JPEG \
+    --top_k_features 16
+
+  # Grid view (detailed, 4 columns per feature)
+  python visualize_multichannel_sae.py \
+    --image_path
+  data/imagenette/gas_pump/ILSVRC2012_val_00004452.JPEG \
+    --grid_view \
+    --top_k_features 16
+
+  # Analyze multiple images from a class
+  python visualize_multichannel_sae.py \
+    --class_name tench \
+    --num_images 5 \
+    --top_k_features 16
