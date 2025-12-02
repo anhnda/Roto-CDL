@@ -95,12 +95,13 @@ class MultiChannelConvSAE(nn.Module):
         # Initialize decoder weights
         nn.init.kaiming_normal_(self.decoder.weight, mode='fan_in')
 
-    def topk_activation(self, x: torch.Tensor) -> torch.Tensor:
+    def topk_activation(self, x: torch.Tensor, threshold: float = 0.1) -> torch.Tensor:
         """
-        Apply Top-K activation: keep only top-k values per spatial position.
+        Apply Top-K activation with thresholding for extra sparsity.
 
         Args:
             x: [B, C, H, W] - Feature activations after ReLU
+            threshold: Minimum activation value to keep (default: 0.1)
 
         Returns:
             x_topk: [B, C, H, W] - Sparse features with only top-k active
@@ -114,7 +115,10 @@ class MultiChannelConvSAE(nn.Module):
         # We want top-k across the channel dimension (dim=1) for each spatial position
         topk_vals, topk_indices = torch.topk(x_flat, k=self.top_k, dim=1)  # [B, k, H*W]
 
-        # Create sparse tensor with only top-k values
+        # Apply threshold: zero out values below threshold (extra sparsity)
+        topk_vals = topk_vals * (topk_vals > threshold).float()
+
+        # Create sparse tensor with only top-k values above threshold
         result = torch.zeros_like(x_flat)
         result.scatter_(1, topk_indices, topk_vals)
 
@@ -603,13 +607,13 @@ if __name__ == "__main__":
     INPUT_CHANNELS = 256    # All ResNet18 layer3 channels
     HIDDEN_DIM = 4096       # Sparse feature dimension (16× expansion)
     KERNEL_SIZE = 1         # 1×1 conv for channel-wise features
-    TOP_K = 16              # Number of active features per spatial position
+    TOP_K = 8               # Number of active features per spatial position (reduced for sparsity)
 
     # Loss weights
-    LAMBDA_L1 = 0.01        # L1 sparsity penalty (reduced since top-k enforces hard sparsity)
-    LAMBDA_LAT = 0.01       # Lateral inhibition penalty
-    LAMBDA_COMPACT = 0.1    # Spatial compactness penalty (Total Variation)
-    LAMBDA_CHANNEL_SPARSITY = 0.05  # Feature-channel sparsity penalty (each feature uses few channels)
+    LAMBDA_L1 = 0.05        # L1 sparsity penalty (increased to encourage sparser activations)
+    LAMBDA_LAT = 0.02       # Lateral inhibition penalty (increased)
+    LAMBDA_COMPACT = 0.2    # Spatial compactness penalty (increased for sparser spatial patterns)
+    LAMBDA_CHANNEL_SPARSITY = 0.1  # Feature-channel sparsity penalty (increased)
 
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
@@ -665,11 +669,12 @@ if __name__ == "__main__":
     print("Starting Training...")
     print("="*80)
     print("\nExpected Behavior:")
-    print(f"  • Reconstruction Loss: Decrease to <0.01")
-    print(f"  • Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.1f}% (enforced by Top-K={TOP_K})")
-    print(f"  • Spatial Compactness: Decrease (smoother feature activations)")
-    print(f"  • Feature Sparsity: Each feature uses ~20-50 input channels")
-    print(f"  • Top-K ensures exactly {TOP_K} features active per spatial position")
+    print(f"  • Reconstruction Loss: Decrease to <0.02")
+    print(f"  • Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.2f}% (Top-K={TOP_K} + threshold=0.1)")
+    print(f"  • Spatial Compactness: Decrease (sparser spatial patterns)")
+    print(f"  • Channel Sparsity: Each feature uses ~20-50 input channels")
+    print(f"  • Feature Maps: Very sparse (most values = 0, only top-{TOP_K} activate)")
+    print(f"  • Threshold removes weak activations (<0.1) for extra sparsity")
     print("="*80 + "\n")
 
     for epoch in range(EPOCHS):
