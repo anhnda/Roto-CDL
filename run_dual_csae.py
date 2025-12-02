@@ -156,7 +156,9 @@ def visualize_dual_features(model, num_features=32, save_path='dual_csae_feature
     axes[0, 1].grid(True, alpha=0.3)
 
     # 3. Per-feature weight magnitudes (shared)
-    shared_feature_norms = model.shared_decoder.weight.detach().cpu().norm(dim=(0, 2, 3)).numpy()
+    # Compute L2 norm over dimensions (0, 2, 3), leaving feature dimension (1)
+    shared_weight = model.shared_decoder.weight.detach().cpu()  # [out_ch, in_ch, h, w]
+    shared_feature_norms = (shared_weight ** 2).sum(dim=(0, 2, 3)).sqrt().numpy()
     n_show = min(num_features, len(shared_feature_norms))
     axes[1, 0].bar(range(n_show), shared_feature_norms[:n_show], color='green', alpha=0.7)
     axes[1, 0].set_title(f'Shared Feature Magnitudes (Top {n_show})')
@@ -165,7 +167,8 @@ def visualize_dual_features(model, num_features=32, save_path='dual_csae_feature
     axes[1, 0].grid(True, alpha=0.3)
 
     # 4. Per-feature weight magnitudes (class)
-    class_feature_norms = model.class_decoder.weight.detach().cpu().norm(dim=(0, 2, 3)).numpy()
+    class_weight = model.class_decoder.weight.detach().cpu()  # [out_ch, in_ch, h, w]
+    class_feature_norms = (class_weight ** 2).sum(dim=(0, 2, 3)).sqrt().numpy()
     n_show = min(num_features, len(class_feature_norms))
     axes[1, 1].bar(range(n_show), class_feature_norms[:n_show], color='orange', alpha=0.7)
     axes[1, 1].set_title(f'Class Feature Magnitudes (Top {n_show})')
@@ -237,7 +240,7 @@ if __name__ == "__main__":
     print("\nSetting up Dual ConvSAE training...")
 
     # Hyperparameters
-    BATCH_SIZE = 256
+    BATCH_SIZE = 360
     INPUT_CHANNELS = X.shape[1]  # Should be 1
     SHARED_DIM = 256  # Global features
     CLASS_DIM = 256   # Class-discriminative features
