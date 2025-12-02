@@ -240,7 +240,7 @@ if __name__ == "__main__":
     print("\nSetting up Dual ConvSAE training...")
 
     # Hyperparameters
-    BATCH_SIZE = 360
+    BATCH_SIZE = 400
     INPUT_CHANNELS = X.shape[1]  # Should be 1
     SHARED_DIM = 256  # Global features
     CLASS_DIM = 256   # Class-discriminative features
@@ -248,12 +248,12 @@ if __name__ == "__main__":
     NUM_CLASSES = 10  # Imagenette
 
     # Loss weights
-    LAMBDA_SHARED_L1 = 0.001    # Sparsity for shared features (reduced to allow more features)
-    LAMBDA_CLASS_L1 = 0.001     # Sparsity for class features (much lower - prioritize discrimination)
+    LAMBDA_SHARED_L1 = 0.00    # Sparsity for shared features (reduced to allow more features)
+    LAMBDA_CLASS_L1 = 0.00     # Sparsity for class features (much lower - prioritize discrimination)
     LAMBDA_SHARED_LAT = 0.00   # Lateral inhibition for shared
     LAMBDA_CLASS_LAT = 0.00    # Lateral inhibition for class (reduced)
     LAMBDA_CLASSIFICATION = 10.0 # Classification loss weight (INCREASED - make it priority)
-    LAMBDA_DIVERSITY = 2      # Diversity loss weight (INCREASED - force class separation)
+    LAMBDA_DIVERSITY = 4      # Diversity loss weight (INCREASED - force class separation)
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5

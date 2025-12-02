@@ -5,3 +5,4 @@
 
   # Compare multiple classes
   python check_same_class_csae.py --compare_classes tench church --num_images 10
+  python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10 --use_resnet18 --dual_csae_path dual_csae_resnet18_model.pkl
