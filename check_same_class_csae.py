@@ -412,10 +412,17 @@ class SameClassCSAEAnalyzer:
 
         # Get decoder weights for all features
         decoder_weights = self.csae_model.decoder.weight.detach().cpu()  # [1, hidden_dim, 1, 1]
-        all_weights = decoder_weights.squeeze().numpy()  # [hidden_dim]
+        all_weights = decoder_weights.flatten().numpy()  # Flatten to 1D array [hidden_dim]
 
-        # Get weights for top shared features (ensure scalar values)
-        top_feature_weights = [float(all_weights[idx]) for idx, _ in results['top_shared_features'][:50]]
+        # Get weights for top shared features (ensure scalar values using .item())
+        top_feature_weights = []
+        for idx, _ in results['top_shared_features'][:50]:
+            weight_val = all_weights[idx]
+            # Handle both scalar and array cases
+            if isinstance(weight_val, np.ndarray):
+                top_feature_weights.append(weight_val.item())
+            else:
+                top_feature_weights.append(float(weight_val))
 
         # Histogram
         ax_weights.hist(top_feature_weights, bins=30, color='steelblue', alpha=0.7, edgecolor='black')
