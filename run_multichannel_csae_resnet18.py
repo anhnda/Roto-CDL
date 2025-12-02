@@ -35,7 +35,7 @@ import sys
 sys.path.append('.')
 from src.gradcam import GradCAM
 
-
+torch.cuda.init()
 # ==========================================
 # Multi-Channel ConvSAE Architecture
 # ==========================================
@@ -692,7 +692,7 @@ if __name__ == "__main__":
     TOP_K = 16               # Number of active features per spatial position (reduced for sparsity)
 
     # Loss weights
-    LAMBDA_L1 = 1        # L1 sparsity penalty (increased to encourage sparser activations)
+    LAMBDA_L1 = 0.05        # L1 sparsity penalty (increased to encourage sparser activations)
     LAMBDA_LAT = 0.05       # Lateral inhibition penalty (increased)
     LAMBDA_COMPACT = 0.2    # Spatial compactness penalty (increased for sparser spatial patterns)
     LAMBDA_CHANNEL_SPARSITY = 0.2  # Feature-channel sparsity penalty (increased)
