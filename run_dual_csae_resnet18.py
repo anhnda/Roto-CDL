@@ -472,12 +472,12 @@ if __name__ == "__main__":
     NUM_CLASSES = 10        # Imagenette has 10 classes (actually 9, but we'll use 10)
 
     # Loss weights (optimized for discrimination)
-    LAMBDA_SHARED_L1 = 0.001
-    LAMBDA_CLASS_L1 = 0.001
+    LAMBDA_SHARED_L1 = 0.00
+    LAMBDA_CLASS_L1 = 0.00
     LAMBDA_SHARED_LAT = 0.00
     LAMBDA_CLASS_LAT = 0.00
-    LAMBDA_CLASSIFICATION = 5.0
-    LAMBDA_DIVERSITY = 1
+    LAMBDA_CLASSIFICATION = 10.0
+    LAMBDA_DIVERSITY = 0.5
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
