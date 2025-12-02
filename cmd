@@ -4,6 +4,4 @@
   python check_same_class_csae.py --class_name tench --num_images 10
 
   # Compare multiple classes
-  python check_same_class_csae.py
-  --compare_classes tench church
-  parachute --num_images 10
+  python check_same_class_csae.py --compare_classes tench church --num_images 10

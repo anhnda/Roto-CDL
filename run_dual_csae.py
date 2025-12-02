@@ -245,12 +245,12 @@ if __name__ == "__main__":
     NUM_CLASSES = 10  # Imagenette
 
     # Loss weights
-    LAMBDA_SHARED_L1 = 0.005    # Sparsity for shared features (reduced to allow more features)
-    LAMBDA_CLASS_L1 = 0.002     # Sparsity for class features (much lower - prioritize discrimination)
-    LAMBDA_SHARED_LAT = 0.002   # Lateral inhibition for shared
-    LAMBDA_CLASS_LAT = 0.001    # Lateral inhibition for class (reduced)
-    LAMBDA_CLASSIFICATION = 5.0 # Classification loss weight (INCREASED - make it priority)
-    LAMBDA_DIVERSITY = 0.5      # Diversity loss weight (INCREASED - force class separation)
+    LAMBDA_SHARED_L1 = 0.001    # Sparsity for shared features (reduced to allow more features)
+    LAMBDA_CLASS_L1 = 0.001     # Sparsity for class features (much lower - prioritize discrimination)
+    LAMBDA_SHARED_LAT = 0.00   # Lateral inhibition for shared
+    LAMBDA_CLASS_LAT = 0.00    # Lateral inhibition for class (reduced)
+    LAMBDA_CLASSIFICATION = 10.0 # Classification loss weight (INCREASED - make it priority)
+    LAMBDA_DIVERSITY = 2      # Diversity loss weight (INCREASED - force class separation)
 
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
