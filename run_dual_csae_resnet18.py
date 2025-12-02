@@ -42,17 +42,17 @@ IMAGENETTE_TO_IMAGENET = {
     'cassette_player': 482,  # n02979186
     'chain_saw': 491,    # n03000684
     'church': 497,       # n03028079
-    'gas_pump': 571,     # n03425413 - French horn → gas pump
+    'french_horn': 566,  # n03394916 - French horn
     'garbage_truck': 569,  # n03417042
+    'gas_pump': 571,     # n03425413 - Gas pump
     'golf_ball': 574,    # n03445777
     'parachute': 701,    # n03888257
-    'tench': 0          # n01440764 (duplicate handling)
 }
 
-# Standard Imagenette class order
+# Standard Imagenette class order (matches dataset folder order)
 IMAGENETTE_CLASSES = [
     'tench', 'springer', 'cassette_player', 'chain_saw', 'church',
-    'gas_pump', 'garbage_truck', 'golf_ball', 'parachute'
+    'french_horn', 'garbage_truck', 'gas_pump', 'golf_ball', 'parachute'
 ]
 
 

@@ -235,8 +235,9 @@ Alternative approach to dictionary learning using a neural network-based sparse 
   - Cassette Player → ImageNet class 482
   - Chain Saw → ImageNet class 491
   - Church → ImageNet class 497
-  - Gas Pump → ImageNet class 571
+  - French Horn → ImageNet class 566
   - Garbage Truck → ImageNet class 569
+  - Gas Pump → ImageNet class 571
   - Golf Ball → ImageNet class 574
   - Parachute → ImageNet class 701
 
