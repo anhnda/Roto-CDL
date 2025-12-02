@@ -210,7 +210,8 @@ class ResNet18ActivationExtractor:
                 all_labels.append(label)
 
         # Stack into tensors
-        X = torch.stack(all_activations).unsqueeze(1)  # [N, 1, 14, 14]
+        # avg_act already has shape [1, 14, 14], so stack gives [N, 1, 14, 14]
+        X = torch.stack(all_activations)  # [N, 1, 14, 14]
         Y = torch.tensor(all_labels, dtype=torch.long)
 
         # Robust normalization
