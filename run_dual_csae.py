@@ -253,7 +253,7 @@ if __name__ == "__main__":
     LAMBDA_SHARED_LAT = 0.00   # Lateral inhibition for shared
     LAMBDA_CLASS_LAT = 0.00    # Lateral inhibition for class (reduced)
     LAMBDA_CLASSIFICATION = 10.0 # Classification loss weight (INCREASED - make it priority)
-    LAMBDA_DIVERSITY = 4      # Diversity loss weight (INCREASED - force class separation)
+    LAMBDA_DIVERSITY = 4      # Diversity  loss weight (INCREASED - force class separation)
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
