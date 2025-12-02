@@ -355,11 +355,12 @@ class MultiChannelSAEVisualizer:
             channel_data = acts[0, c, :, :]
 
             # Use max instead of quantile for differentiability
-            scale_factor = channel_data.max()
+            scale_factor = channel_data.max()  # Keep as tensor to preserve gradients
 
-            if scale_factor > 1e-8:
-                # Clamp operation (differentiable)
-                channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+            if scale_factor.item() > 1e-8:
+                # Clamp operation (differentiable) - use torch.clamp with proper types
+                channel_data = torch.clamp(channel_data, min=0.0)  # Ensure non-negative
+                channel_data = torch.minimum(channel_data, scale_factor)  # Clip to max
                 normalized[0, c, :, :] = channel_data / (scale_factor + 1e-8)
 
         return normalized
