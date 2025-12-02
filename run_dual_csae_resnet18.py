@@ -169,8 +169,8 @@ class ResNet18ActivationExtractor:
             normalize: Apply robust normalization (99th percentile)
 
         Returns:
-            X: [N, 1, 14, 14] - Collected activation maps (single-channel)
-            Y: [N] - Corresponding labels
+            X: [N_total_maps, 1, 14, 14] - All selected activation maps (each channel is a separate sample)
+            Y: [N_total_maps] - Corresponding labels (repeated for each selected channel)
         """
         all_activations = []
         all_labels = []
@@ -206,16 +206,16 @@ class ResNet18ActivationExtractor:
                 # Extract activation maps from selected channels
                 selected_acts = activations[0, selected_channels, :, :]  # [n_selected, 14, 14]
 
-                # Average over selected channels to get single-channel representation
-                # This creates a class-discriminative summary of the activation
-                avg_act = selected_acts.mean(dim=0, keepdim=True)  # [1, 14, 14]
-
-                all_activations.append(avg_act)
-                all_labels.append(label)
+                # Add all selected activation maps (not averaged)
+                # Each selected channel becomes a separate training sample
+                for channel_act in selected_acts:
+                    all_activations.append(channel_act.unsqueeze(0))  # [1, 14, 14]
+                    all_labels.append(label)
 
         # Stack into tensors
-        # avg_act already has shape [1, 14, 14], so stack gives [N, 1, 14, 14]
-        X = torch.stack(all_activations)  # [N, 1, 14, 14]
+        # Each activation map has shape [1, 14, 14], stack gives [N_total_maps, 1, 14, 14]
+        # where N_total_maps = sum of all selected channels across all images
+        X = torch.stack(all_activations)  # [N_total_maps, 1, 14, 14]
         Y = torch.tensor(all_labels, dtype=torch.long)
 
         # Print channel selection statistics
@@ -447,7 +447,7 @@ if __name__ == "__main__":
     print("\nExtracting activation maps from ResNet18 layer3...")
     X, Y = extractor.collect_activation_maps(
         data_loader,
-        top_k_percentile=0.9,  # Use top 90% of channels by GradCAM score
+        top_k_percentile=0.8,  # Use top 90% of channels by GradCAM score
         normalize=True
     )
 
