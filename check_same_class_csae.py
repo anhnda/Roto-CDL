@@ -390,7 +390,7 @@ class SameClassCSAEAnalyzer:
         # Box plot of raw scores
         bp = ax_raw_scores.boxplot(
             raw_scores_per_feature,
-            labels=feature_labels,
+            tick_labels=feature_labels,
             patch_artist=True,
             showfliers=False
         )
@@ -414,8 +414,8 @@ class SameClassCSAEAnalyzer:
         decoder_weights = self.csae_model.decoder.weight.detach().cpu()  # [1, hidden_dim, 1, 1]
         all_weights = decoder_weights.squeeze().numpy()  # [hidden_dim]
 
-        # Get weights for top shared features
-        top_feature_weights = [all_weights[idx] for idx, _ in results['top_shared_features'][:50]]
+        # Get weights for top shared features (ensure scalar values)
+        top_feature_weights = [float(all_weights[idx]) for idx, _ in results['top_shared_features'][:50]]
 
         # Histogram
         ax_weights.hist(top_feature_weights, bins=30, color='steelblue', alpha=0.7, edgecolor='black')
