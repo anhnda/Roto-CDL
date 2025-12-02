@@ -98,13 +98,13 @@ class MultiChannelConvSAE(nn.Module):
         # Initialize decoder weights
         nn.init.kaiming_normal_(self.decoder.weight, mode='fan_in')
 
-    def topk_activation(self, x: torch.Tensor, threshold: float = 0.1) -> torch.Tensor:
+    def topk_activation(self, x: torch.Tensor, threshold: float = 0.0) -> torch.Tensor:
         """
-        Apply Top-K activation with thresholding for extra sparsity.
+        Apply Top-K activation (hard sparsity).
 
         Args:
             x: [B, C, H, W] - Feature activations after ReLU
-            threshold: Minimum activation value to keep (default: 0.1)
+            threshold: Minimum activation value to keep (default: 0.0, disabled)
 
         Returns:
             x_topk: [B, C, H, W] - Sparse features with only top-k active
@@ -118,8 +118,9 @@ class MultiChannelConvSAE(nn.Module):
         # We want top-k across the channel dimension (dim=1) for each spatial position
         topk_vals, topk_indices = torch.topk(x_flat, k=self.top_k, dim=1)  # [B, k, H*W]
 
-        # Apply threshold: zero out values below threshold (extra sparsity)
-        topk_vals = topk_vals * (topk_vals > threshold).float()
+        # Apply threshold only if > 0 (optional, typically disabled)
+        if threshold > 0:
+            topk_vals = topk_vals * (topk_vals > threshold).float()
 
         # Create sparse tensor with only top-k values above threshold
         result = torch.zeros_like(x_flat)
@@ -752,11 +753,11 @@ if __name__ == "__main__":
     print("="*80)
     print("\nExpected Behavior:")
     print(f"  • Reconstruction Loss: Decrease to <0.02")
-    print(f"  • Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.2f}% (Top-K={TOP_K} + threshold=0.1)")
+    print(f"  • Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.2f}% (Top-K={TOP_K}, hard sparsity)")
     print(f"  • Spatial Compactness: Decrease (sparser spatial patterns)")
     print(f"  • Channel Sparsity: Each feature uses ~20-50 input channels")
-    print(f"  • Feature Maps: Very sparse (most values = 0, only top-{TOP_K} activate)")
-    print(f"  • Threshold removes weak activations (<0.1) for extra sparsity")
+    print(f"  • Feature Maps: Very sparse (most values = 0, only top-{TOP_K} activate per position)")
+    print(f"  • GradCAM: ~50-150 channels selected per image (80% cumulative score)")
     print("="*80 + "\n")
 
     for epoch in range(EPOCHS):
