@@ -414,66 +414,72 @@ class MultiChannelSAEVisualizer:
 
         Layout:
         - Row 1: Original image + top feature activation heatmap
-        - Rows 2-N: For each top feature:
-            - Column 1: Feature activation map (14×14)
-            - Column 2: Saliency map (224×224)
-            - Column 3: Overlay (saliency on original image)
+        - Rows 2+: Grid of top features showing:
+            - Feature activation map (14×14) in hidden space
+            - Saliency map overlay on input image
         """
         n_features = len(top_features)
-        n_cols = 4
-        n_rows = (n_features + n_cols - 1) // n_cols + 1  # +1 for header row
 
-        fig = plt.figure(figsize=(20, 4 * n_rows))
-        gs = fig.add_gridspec(n_rows, n_cols, hspace=0.3, wspace=0.3)
+        # Create figure with enough space for all features
+        n_cols = 8  # 4 pairs of (activation_map, saliency_overlay)
+        n_rows = 1 + (n_features + 3) // 4  # Header row + feature rows
+
+        fig = plt.figure(figsize=(24, 3.5 * n_rows))
+        gs = fig.add_gridspec(n_rows, n_cols, hspace=0.35, wspace=0.25)
 
         # Row 0: Overview
-        ax_img = fig.add_subplot(gs[0, 0])
+        ax_img = fig.add_subplot(gs[0, 0:2])
         ax_img.imshow(image)
         ax_img.set_title("Input Image", fontsize=12, fontweight='bold')
         ax_img.axis('off')
 
         # Show top feature importance distribution
-        ax_bar = fig.add_subplot(gs[0, 1:])
+        ax_bar = fig.add_subplot(gs[0, 2:])
         importances = [imp for _, imp, _ in top_features]
         feature_indices = [f"F{idx}" for idx, _, _ in top_features]
-        ax_bar.bar(range(len(importances)), importances, color='blue', alpha=0.7)
+        ax_bar.bar(range(len(importances)), importances, color='steelblue', alpha=0.8, edgecolor='navy')
         ax_bar.set_xlabel('Feature Index', fontsize=10)
         ax_bar.set_ylabel('Importance (sum of activations)', fontsize=10)
         ax_bar.set_title(f'Top-{n_features} Feature Importance', fontsize=12, fontweight='bold')
         ax_bar.set_xticks(range(len(importances)))
         ax_bar.set_xticklabels(feature_indices, rotation=45, ha='right', fontsize=8)
-        ax_bar.grid(True, alpha=0.3)
+        ax_bar.grid(True, alpha=0.3, axis='y')
 
-        # Rows 1+: Individual features
+        # Rows 1+: Individual features (2 columns per feature: activation map + saliency overlay)
         for i, ((feat_idx, importance, activation_map), saliency) in enumerate(zip(top_features, saliency_maps)):
-            row = 1 + i // n_cols
-            col = i % n_cols
+            row = 1 + i // 4  # 4 features per row
+            col_offset = (i % 4) * 2  # Each feature takes 2 columns
 
-            # Create subplot
-            ax = fig.add_subplot(gs[row, col])
+            # Column 1: Feature activation map in hidden space (14×14)
+            ax_act = fig.add_subplot(gs[row, col_offset])
+            im_act = ax_act.imshow(activation_map.numpy(), cmap='hot', interpolation='bilinear')
+            ax_act.set_title(f"F{feat_idx} Activation\n(14×14 hidden space)", fontsize=8, fontweight='bold')
+            ax_act.axis('off')
+            cbar_act = plt.colorbar(im_act, ax=ax_act, fraction=0.046, pad=0.04)
+            cbar_act.ax.tick_params(labelsize=6)
 
-            # Show saliency map overlaid on original image
-            ax.imshow(image, alpha=0.5)
+            # Column 2: Saliency map overlaid on original image
+            ax_sal = fig.add_subplot(gs[row, col_offset + 1])
+            ax_sal.imshow(image, alpha=0.5)
             saliency_norm = saliency / (saliency.max() + 1e-8)
-            im = ax.imshow(saliency_norm, cmap='jet', alpha=0.5)
-            ax.set_title(f"Feature {feat_idx}\nImportance: {importance:.3f}",
-                        fontsize=9, fontweight='bold')
-            ax.axis('off')
-
-            # Add colorbar
-            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cbar.ax.tick_params(labelsize=7)
+            im_sal = ax_sal.imshow(saliency_norm, cmap='jet', alpha=0.5)
+            ax_sal.set_title(f"F{feat_idx} Saliency\nImportance: {importance:.2f}", fontsize=8, fontweight='bold')
+            ax_sal.axis('off')
+            cbar_sal = plt.colorbar(im_sal, ax=ax_sal, fraction=0.046, pad=0.04)
+            cbar_sal.ax.tick_params(labelsize=6)
 
         # Hide unused subplots
-        for i in range(n_features, n_cols * (n_rows - 1)):
+        total_feature_cols = ((n_features + 3) // 4) * 4 * 2  # Round up to 4, then * 2 cols per feature
+        for i in range(n_features * 2, total_feature_cols):
             row = 1 + i // n_cols
             col = i % n_cols
             if row < n_rows:
                 ax = fig.add_subplot(gs[row, col])
                 ax.axis('off')
 
-        plt.suptitle(f'Multi-Channel ConvSAE: Top-{n_features} Activated Features',
-                    fontsize=16, fontweight='bold', y=0.995)
+        plt.suptitle(f'Multi-Channel ConvSAE: Top-{n_features} Activated Features\n' +
+                    f'Left: Hidden Space Activations (14×14) | Right: Input Saliency Maps (224×224)',
+                    fontsize=14, fontweight='bold', y=0.998)
 
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -485,6 +491,12 @@ class MultiChannelSAEVisualizer:
                               save_path: str = None):
         """
         Create a compact grid visualization showing activation maps and saliency.
+
+        Each row shows one feature with 4 columns:
+        - Column 1: Feature activation map in hidden space (14×14)
+        - Column 2: Saliency map (224×224)
+        - Column 3: Saliency overlay on input image
+        - Column 4: Masked image (only salient regions)
 
         Args:
             image_path: Path to input image
@@ -508,28 +520,31 @@ class MultiChannelSAEVisualizer:
             saliency_maps.append(saliency)
         print()
 
-        # Create compact grid: each row shows [activation_map | saliency | overlay]
+        # Create compact grid: each row shows [activation_map | saliency | overlay | masked]
         n_features = len(top_features)
-        fig, axes = plt.subplots(n_features, 4, figsize=(16, 3 * n_features))
+        fig, axes = plt.subplots(n_features, 4, figsize=(18, 3 * n_features))
         if n_features == 1:
             axes = axes.reshape(1, -1)
 
         for i, ((feat_idx, importance, activation_map), saliency) in enumerate(zip(top_features, saliency_maps)):
-            # Column 0: Feature activation map
-            axes[i, 0].imshow(activation_map, cmap='hot')
-            axes[i, 0].set_title(f"Feature {feat_idx}\nActivation (14×14)", fontsize=9)
+            # Column 0: Feature activation map in hidden space (14×14)
+            im0 = axes[i, 0].imshow(activation_map.numpy(), cmap='hot', interpolation='bilinear')
+            axes[i, 0].set_title(f"Feature {feat_idx}\nActivation (14×14)\nImportance: {importance:.2f}",
+                                fontsize=9, fontweight='bold')
             axes[i, 0].axis('off')
+            plt.colorbar(im0, ax=axes[i, 0], fraction=0.046, pad=0.04)
 
-            # Column 1: Saliency map
-            axes[i, 1].imshow(saliency, cmap='jet')
-            axes[i, 1].set_title(f"Saliency Map\n(224×224)", fontsize=9)
+            # Column 1: Saliency map (224×224)
+            saliency_norm = saliency / (saliency.max() + 1e-8)
+            im1 = axes[i, 1].imshow(saliency_norm, cmap='jet')
+            axes[i, 1].set_title(f"Saliency Map\n(224×224)", fontsize=9, fontweight='bold')
             axes[i, 1].axis('off')
+            plt.colorbar(im1, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
             # Column 2: Overlay on image
             axes[i, 2].imshow(image, alpha=0.6)
-            saliency_norm = saliency / (saliency.max() + 1e-8)
             axes[i, 2].imshow(saliency_norm, cmap='jet', alpha=0.4)
-            axes[i, 2].set_title(f"Overlay\nImportance: {importance:.3f}", fontsize=9)
+            axes[i, 2].set_title(f"Saliency Overlay\non Input", fontsize=9, fontweight='bold')
             axes[i, 2].axis('off')
 
             # Column 3: Masked image (show only salient regions)
@@ -537,10 +552,11 @@ class MultiChannelSAEVisualizer:
             masked_img = np.array(image).copy()
             masked_img[~mask] = masked_img[~mask] * 0.3  # Dim non-salient regions
             axes[i, 3].imshow(masked_img.astype(np.uint8))
-            axes[i, 3].set_title(f"Salient Regions\n(threshold=0.5)", fontsize=9)
+            axes[i, 3].set_title(f"Salient Regions\n(threshold=0.5)", fontsize=9, fontweight='bold')
             axes[i, 3].axis('off')
 
-        plt.suptitle(f'Multi-Channel ConvSAE Feature Analysis\nImage: {Path(image_path).name}',
+        plt.suptitle(f'Multi-Channel ConvSAE Feature Analysis (Grid View)\n' +
+                    f'Image: {Path(image_path).name} | Showing Top-{n_features} Features',
                     fontsize=14, fontweight='bold')
         plt.tight_layout()
 
