@@ -461,9 +461,9 @@ if __name__ == "__main__":
     LAMBDA_CLASSIFICATION = 5.0
     LAMBDA_DIVERSITY = 0.5
 
-    LR = 3e-4
+    LR = 1e-3
     WEIGHT_DECAY = 1e-5
-    EPOCHS = 15
+    EPOCHS = 100
 
     print(f"\nTraining Configuration:")
     print(f"  Backbone: ResNet18 (pretrained ImageNet)")
@@ -496,6 +496,7 @@ if __name__ == "__main__":
 
     # Create DataLoader
     dataset = TensorDataset(X, Y)
+    print("SHAPE: ", X.shape, Y.shape)
     train_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
     # Logging
