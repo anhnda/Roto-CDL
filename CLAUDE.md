@@ -16,8 +16,11 @@ python preprocess.py
 # Run the main CDL pipeline
 python run_cdl.py
 
-# Run the ConvSAE training pipeline
+# Run the ConvSAE training pipeline (single pathway)
 python run_csae.py
+
+# Run the Dual ConvSAE training pipeline (shared + class-discriminative features)
+python run_dual_csae.py
 
 # Generate explanations for model predictions (using CDL dictionary)
 python explain.py
@@ -131,6 +134,85 @@ Alternative approach to dictionary learning using a neural network-based sparse 
   - `csae_training_info.pkl`: Training configuration and logs
   - `csae_training_logs.png`: 4-panel diagnostic plot (reconstruction, L1, lateral inhibition, active neurons)
   - `csae_features.png`: Visualization of learned decoder features
+
+#### Dual Convolutional Sparse Autoencoder (`src/convsae.py:DualConvSAE`, `run_dual_csae.py`)
+**Problem**: Standard ConvSAE learns features that are shared across all classes, making it difficult to identify class-discriminative patterns.
+
+**Solution**: Dual-pathway architecture that explicitly separates shared and class-specific features.
+
+- **DualConvSAE Architecture**:
+  - **Shared Pathway**: Learns global features common across all classes (unsupervised)
+    - Shared encoder: Conv2d(in_channels → shared_dim)
+    - Shared decoder: Conv2d(shared_dim → in_channels)
+    - Loss: Reconstruction + L1 sparsity + Lateral inhibition
+
+  - **Class-Specific Pathway**: Learns discriminative features for classification (supervised)
+    - Class encoder: Conv2d(in_channels → class_dim)
+    - Class decoder: Conv2d(class_dim → in_channels)
+    - Classifier head: AdaptiveAvgPool2d → Linear(class_dim → num_classes)
+    - Loss: Reconstruction + L1 sparsity + Lateral inhibition + Classification + Diversity
+
+  - **Combined Reconstruction**: `recon = shared_decoder(shared_feats) + class_decoder(class_feats)`
+
+- **Training Objectives**:
+  1. **Shared Reconstruction**: MSE between shared pathway reconstruction and input
+  2. **Class Reconstruction**: MSE between class pathway reconstruction and input
+  3. **Total Reconstruction**: MSE between combined reconstruction and input
+  4. **Shared Sparsity**: L1 penalty on shared features
+  5. **Class Sparsity**: L1 penalty on class-specific features
+  6. **Classification**: CrossEntropy loss on class predictions
+  7. **Diversity**: Encourages different classes to activate different features (orthogonality)
+  8. **Lateral Inhibition**: Applied to both pathways to prevent blob-like activations
+
+- **Key Advantages**:
+  - Explicitly separates global patterns (edges, textures) from class-specific patterns (object parts)
+  - Classification head provides supervision for class pathway
+  - Diversity loss ensures classes use different feature subsets
+  - Shared pathway captures common low-level features, reducing redundancy
+  - Class pathway focuses on discriminative high-level patterns
+
+- **Hyperparameters** (`run_dual_csae.py`):
+  - `shared_dim=256`: Number of shared features
+  - `class_dim=256`: Number of class-specific features
+  - `kernel_size=3`: 3×3 convolution for spatial context
+  - `lambda_shared_l1=0.01`: Sparsity penalty for shared features
+  - `lambda_class_l1=0.01`: Sparsity penalty for class features
+  - `lambda_classification=1.0`: Classification loss weight
+  - `lambda_diversity=0.1`: Diversity loss weight (encourages class separation)
+  - `lr=3e-4`, `epochs=15`, `batch_size=256`
+
+- **Training Pipeline** (`run_dual_csae.py`):
+  1. Collects activation maps with class labels
+  2. Trains dual pathways simultaneously
+  3. Monitors classification accuracy and diversity metrics
+  4. Saves both pathways and classifier
+  5. Generates comprehensive visualizations
+
+- **Output Files**:
+  - `dual_csae_model.pth`: PyTorch state dict
+  - `dual_csae_model.pkl`: Full model (joblib)
+  - `dual_csae_training_info.pkl`: Training config and logs
+  - `dual_csae_training_logs.png`: 3×4 diagnostic plot showing:
+    - Row 1: Reconstruction losses, classification loss, accuracy
+    - Row 2: Sparsity metrics, active neuron percentages, diversity loss
+    - Row 3: Lateral inhibition, total loss, loss components, feature usage ratio
+  - `dual_csae_features.png`: Weight distributions for both pathways
+
+- **Monitoring During Training**:
+  - **Classification Accuracy**: Should increase to 70-90% (validates class pathway is learning)
+  - **Diversity Loss**: Should decrease (classes use different features)
+  - **Active Neurons**: Both pathways should maintain 5-15% sparsity
+  - **Feature Usage Ratio**: `shared_l1 / class_l1` ≈ 1.0 indicates balanced usage
+
+- **When to Use Dual vs Standard ConvSAE**:
+  - Use **Dual ConvSAE** when:
+    - You need to identify class-discriminative features
+    - Cross-class feature analysis shows too much overlap
+    - You want interpretable separation between global and class-specific patterns
+  - Use **Standard ConvSAE** when:
+    - You want a simpler, faster model
+    - Class labels are unavailable
+    - Task is unsupervised feature discovery
 
 #### Sparse Coding Inference (`src/batch_cdl_large.py:solve_sparse_code`)
 - Given learned dictionary Phi, solves for sparse code Z

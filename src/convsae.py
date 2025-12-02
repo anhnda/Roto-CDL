@@ -127,6 +127,117 @@ class ClassDiversityLoss(nn.Module):
 
         return diversity_loss
 
+
+class DualConvSAE(nn.Module):
+    """
+    Dual-pathway Convolutional Sparse Autoencoder that learns:
+    1. Shared features: Global patterns common across all classes (unsupervised)
+    2. Class-specific features: Discriminative patterns for classification (supervised)
+
+    Architecture:
+    - Shared pathway: encoder → decoder (reconstruction loss + L1 sparsity)
+    - Class pathway: encoder → decoder + classifier (reconstruction + classification + L1 sparsity)
+    - Combined reconstruction: shared_recon + class_recon
+    """
+    def __init__(self, in_channels=1, shared_dim=256, class_dim=256, num_classes=10, kernel_size=1):
+        super().__init__()
+        self.shared_dim = shared_dim
+        self.class_dim = class_dim
+        self.num_classes = num_classes
+
+        padding = (kernel_size - 1) // 2
+
+        # ===== Shared Pathway (Global Features) =====
+        self.shared_encoder = nn.Conv2d(in_channels, shared_dim, kernel_size, padding=padding)
+        self.shared_decoder = nn.Conv2d(shared_dim, in_channels, kernel_size, padding=padding)
+        self.shared_encoder_bias = nn.Parameter(torch.zeros(shared_dim))
+
+        # ===== Class-Specific Pathway (Discriminative Features) =====
+        self.class_encoder = nn.Conv2d(in_channels, class_dim, kernel_size, padding=padding)
+        self.class_decoder = nn.Conv2d(class_dim, in_channels, kernel_size, padding=padding)
+        self.class_encoder_bias = nn.Parameter(torch.zeros(class_dim))
+
+        # ===== Classifier Head (for class-specific features) =====
+        # Uses global average pooling + linear layer
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(class_dim, num_classes)
+        )
+
+        # ===== Initialization =====
+        # Initialize biases to positive values to prevent ReLU death
+        nn.init.constant_(self.shared_encoder_bias, 2.0)
+        nn.init.constant_(self.class_encoder_bias, 2.0)
+
+        # Initialize encoder weights (positive to prevent ReLU death)
+        nn.init.uniform_(self.shared_encoder.weight, a=0.0, b=0.1)
+        nn.init.uniform_(self.class_encoder.weight, a=0.0, b=0.1)
+
+        # Initialize decoder weights (positive for non-negativity constraint)
+        nn.init.uniform_(self.shared_decoder.weight, a=0.0, b=0.02)
+        nn.init.uniform_(self.class_decoder.weight, a=0.0, b=0.02)
+
+        # Initialize classifier
+        nn.init.kaiming_normal_(self.classifier[2].weight)
+        nn.init.zeros_(self.classifier[2].bias)
+
+    def forward(self, x, return_logits=False):
+        """
+        Forward pass through both pathways.
+
+        Args:
+            x: [B, C, H, W] - input activation maps
+            return_logits: If True, returns classification logits (for training)
+
+        Returns:
+            reconstruction: [B, C, H, W] - combined reconstruction
+            shared_features: [B, shared_dim, H, W] - shared feature activations
+            class_features: [B, class_dim, H, W] - class-specific feature activations
+            class_logits: [B, num_classes] - classification logits (only if return_logits=True)
+        """
+        # ===== Shared Pathway =====
+        shared_pre_act = self.shared_encoder(x) + self.shared_encoder_bias.view(1, -1, 1, 1)
+        shared_features = F.relu(shared_pre_act)
+        shared_recon = self.shared_decoder(shared_features)
+
+        # ===== Class-Specific Pathway =====
+        class_pre_act = self.class_encoder(x) + self.class_encoder_bias.view(1, -1, 1, 1)
+        class_features = F.relu(class_pre_act)
+        class_recon = self.class_decoder(class_features)
+
+        # ===== Combined Reconstruction =====
+        reconstruction = shared_recon + class_recon
+
+        # ===== Classification (optional) =====
+        class_logits = None
+        if return_logits:
+            class_logits = self.classifier(class_features)
+
+        return reconstruction, shared_features, class_features, class_logits
+
+    @torch.no_grad()
+    def normalize_decoder_weights(self):
+        """Normalize decoder weights with non-negativity constraint."""
+        for decoder in [self.shared_decoder, self.class_decoder]:
+            weight = decoder.weight
+            # Apply ReLU to enforce non-negativity
+            weight = torch.relu(weight)
+            # L2 normalization
+            norms = weight.norm(p=2, dim=(0, 2, 3), keepdim=True)
+            norms = torch.clamp(norms, min=1e-8)
+            decoder.weight.data = weight / norms
+
+    @torch.no_grad()
+    def normalize_encoder_weights(self):
+        """Normalize encoder weights to prevent explosion."""
+        for encoder in [self.shared_encoder, self.class_encoder]:
+            weight = encoder.weight
+            # L2 normalization per output channel
+            norms = weight.norm(p=2, dim=(1, 2, 3), keepdim=True)
+            norms = torch.clamp(norms, min=1e-8)
+            encoder.weight.data = weight / norms
+
 # ==========================================
 # 2. Training with Detailed Logging
 # ==========================================
