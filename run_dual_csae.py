@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torchvision import datasets, transforms
 from tqdm import tqdm
-
+torch.cuda.init()
 
 def plot_dual_training_logs(logs, save_path='dual_csae_training_logs.png'):
     """
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     LAMBDA_CLASSIFICATION = 10.0 # Classification loss weight (INCREASED - make it priority)
     LAMBDA_DIVERSITY = 2      # Diversity loss weight (INCREASED - force class separation)
 
-    LR = 3e-4
+    LR = 1e-3
     WEIGHT_DECAY = 1e-5
     EPOCHS = 15
 
