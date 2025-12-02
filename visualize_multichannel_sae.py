@@ -3,11 +3,12 @@ Multi-Channel ConvSAE Visualization Script
 
 For a given input image:
 1. Extract ResNet18 layer3 activations (256 channels, 14×14)
-2. Pass through trained Multi-Channel ConvSAE with Top-K activation
-3. Identify top-k most activated feature maps (e.g., top 16 out of 4096)
-4. For each top feature, use DeconvNet/Guided Backpropagation to find
+2. Use GradCAM to identify the top channel (highest scoring)
+3. Pass the top channel through trained Multi-Channel ConvSAE with Top-K activation
+4. Identify top-k most activated feature maps (e.g., top 16 out of 4096)
+5. For each top feature, use DeconvNet/Guided Backpropagation to find
    which input pixels contributed to that feature activation
-5. Visualize results: input image + top features + saliency maps
+6. Visualize results: input image + top channel + top features + saliency maps
 
 Usage:
     # Visualize single image
@@ -37,6 +38,7 @@ import sys
 # Import our model class
 sys.path.append('.')
 from run_multichannel_csae_resnet18 import MultiChannelConvSAE
+from src.gradcam import GradCAM
 
 
 class GuidedBackpropReLU(nn.Module):
@@ -152,13 +154,16 @@ class MultiChannelSAEVisualizer:
 
     def __init__(self,
                  csae_model_path: str = 'multichannel_csae_resnet18_model.pkl',
-                 device='cuda'):
+                 device='cuda',
+                 cumulative_threshold=0.8):
         """
         Args:
             csae_model_path: Path to trained Multi-Channel ConvSAE
             device: Device to run on
+            cumulative_threshold: GradCAM cumulative threshold for channel selection (default: 0.8 = 80%)
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.cumulative_threshold = cumulative_threshold
 
         # Load Multi-Channel ConvSAE
         print(f"Loading Multi-Channel ConvSAE from {csae_model_path}...")
@@ -174,6 +179,11 @@ class MultiChannelSAEVisualizer:
         # Hook for layer3 activations
         self.layer3_activations = None
         self.resnet.layer3.register_forward_hook(self._save_layer3_activation)
+
+        # GradCAM for channel selection
+        print("Setting up GradCAM for channel selection...")
+        self.gradcam = GradCAM(self.resnet, self.resnet.layer3)
+        print(f"  ✓ GradCAM threshold: {cumulative_threshold * 100:.0f}% cumulative score")
 
         # Image preprocessing
         self.transform = transforms.Compose([
@@ -191,6 +201,27 @@ class MultiChannelSAEVisualizer:
     def _save_layer3_activation(self, module, input, output):
         """Hook to save layer3 activations."""
         self.layer3_activations = output.detach()
+
+    def _select_top_channel_with_gradcam(self, image: torch.Tensor) -> Tuple[int, torch.Tensor]:
+        """
+        Use GradCAM to select the top channel (highest scoring).
+
+        Args:
+            image: [1, 3, 224, 224] - Input image
+
+        Returns:
+            top_channel_idx: Index of the top channel
+            channel_weights: [256] - GradCAM importance scores for all channels
+        """
+        # Compute GradCAM channel weights
+        weights, _, pred_class = self.gradcam.forward(image, class_idx=None, verbose=False)
+
+        # weights: [256] - GradCAM importance scores (already ReLU'd)
+
+        # Find the top channel
+        top_channel_idx = torch.argmax(weights).item()
+
+        return top_channel_idx, weights
 
     def _normalize_layer3_activations(self, acts: torch.Tensor) -> torch.Tensor:
         """
@@ -217,7 +248,13 @@ class MultiChannelSAEVisualizer:
 
     def extract_features(self, image_path: str, top_k: int = 16) -> Dict:
         """
-        Extract top-k activated features for an input image.
+        Extract top-k activated features for an input image using GradCAM channel selection.
+
+        For each image:
+        1. Use GradCAM to identify the top activation channel (highest scoring)
+        2. Extract that single channel from layer3
+        3. Pass through CSAE to get sparse features
+        4. Identify top-k activated CSAE features
 
         Args:
             image_path: Path to input image
@@ -227,7 +264,10 @@ class MultiChannelSAEVisualizer:
             results: Dictionary containing:
                 - image: Original PIL image
                 - image_tensor: Preprocessed image tensor
-                - layer3_acts: Layer3 activations [1, 256, 14, 14]
+                - layer3_acts: Full layer3 activations [1, 256, 14, 14]
+                - top_channel_idx: Index of the top GradCAM channel
+                - top_channel_act: Top channel activation [1, 1, 14, 14]
+                - channel_weights: GradCAM weights for all channels [256]
                 - sparse_features: CSAE sparse features [1, 4096, 14, 14]
                 - top_features: List of (feature_idx, importance, activation_map)
         """
@@ -238,14 +278,27 @@ class MultiChannelSAEVisualizer:
         # Extract layer3 activations
         with torch.no_grad():
             _ = self.resnet(image_tensor)
-            layer3_acts = self.layer3_activations.clone()
+            layer3_acts = self.layer3_activations.clone()  # [1, 256, 14, 14]
 
-        # Normalize activations (same as training)
-        layer3_acts_norm = self._normalize_layer3_activations(layer3_acts)
+        # Use GradCAM to select the top channel
+        top_channel_idx, channel_weights = self._select_top_channel_with_gradcam(image_tensor)
+
+        print(f"  GradCAM selected top channel: {top_channel_idx} (score: {channel_weights[top_channel_idx]:.4f})")
+
+        # Extract only the top channel
+        top_channel_act = layer3_acts[:, top_channel_idx:top_channel_idx+1, :, :]  # [1, 1, 14, 14]
+
+        # Normalize the top channel activation (same as training)
+        top_channel_norm = self._normalize_layer3_activations(top_channel_act)
+
+        # For CSAE: We need to pass a [1, 256, 14, 14] tensor with only the top channel non-zero
+        # Create a zero tensor and insert the top channel at its position
+        layer3_masked = torch.zeros_like(layer3_acts)
+        layer3_masked[:, top_channel_idx:top_channel_idx+1, :, :] = top_channel_norm
 
         # Pass through CSAE encoder (with Top-K)
         with torch.no_grad():
-            _, sparse_features = self.csae_model(layer3_acts_norm, use_topk=True)
+            _, sparse_features = self.csae_model(layer3_masked, use_topk=True)
 
         # Compute feature importance (sum of activations per feature)
         # sparse_features: [1, 4096, 14, 14]
@@ -264,7 +317,9 @@ class MultiChannelSAEVisualizer:
             'image': image,
             'image_tensor': image_tensor,
             'layer3_acts': layer3_acts.cpu(),
-            'layer3_acts_norm': layer3_acts_norm.cpu(),
+            'top_channel_idx': top_channel_idx,
+            'top_channel_act': top_channel_act.cpu(),
+            'channel_weights': channel_weights.cpu(),
             'sparse_features': sparse_features.cpu(),
             'top_features': top_features,
             'feature_importance': feature_importance.cpu()
@@ -384,6 +439,8 @@ class MultiChannelSAEVisualizer:
         image = results['image']
         image_tensor = results['image_tensor']
         top_features = results['top_features']
+        top_channel_idx = results['top_channel_idx']
+        top_channel_act = results['top_channel_act']
 
         print(f"✓ Found {len(top_features)} top features")
         print(f"Computing saliency maps...")
@@ -399,7 +456,7 @@ class MultiChannelSAEVisualizer:
 
         # Visualize
         print("Generating visualization...")
-        self._plot_results(image, top_features, saliency_maps, save_path)
+        self._plot_results(image, top_features, saliency_maps, top_channel_idx, top_channel_act, save_path)
 
         print(f"✓ Visualization complete!")
         if save_path:
@@ -408,12 +465,14 @@ class MultiChannelSAEVisualizer:
     def _plot_results(self, image: Image.Image,
                      top_features: List[Tuple],
                      saliency_maps: List[torch.Tensor],
+                     top_channel_idx: int,
+                     top_channel_act: torch.Tensor,
                      save_path: str = None):
         """
         Plot visualization of top features and their saliency maps.
 
         Layout:
-        - Row 1: Original image + top feature activation heatmap
+        - Row 1: Original image + top GradCAM channel + top feature importance
         - Rows 2+: Grid of top features showing:
             - Feature activation map (14×14) in hidden space
             - Saliency map overlay on input image
@@ -421,34 +480,45 @@ class MultiChannelSAEVisualizer:
         n_features = len(top_features)
 
         # Create figure with enough space for all features
-        n_cols = 8  # 4 pairs of (activation_map, saliency_overlay)
-        n_rows = 1 + (n_features + 3) // 4  # Header row + feature rows
+        n_cols = 9  # 3 overview + 3 pairs of (activation_map, saliency_overlay)
+        n_rows = 1 + (n_features + 2) // 3  # Header row + feature rows (3 features per row)
 
-        fig = plt.figure(figsize=(24, 3.5 * n_rows))
+        fig = plt.figure(figsize=(27, 3.5 * n_rows))
         gs = fig.add_gridspec(n_rows, n_cols, hspace=0.35, wspace=0.25)
 
         # Row 0: Overview
+        # Column 0-1: Input image
         ax_img = fig.add_subplot(gs[0, 0:2])
         ax_img.imshow(image)
         ax_img.set_title("Input Image", fontsize=12, fontweight='bold')
         ax_img.axis('off')
 
-        # Show top feature importance distribution
-        ax_bar = fig.add_subplot(gs[0, 2:])
+        # Column 2-3: Top GradCAM channel
+        ax_channel = fig.add_subplot(gs[0, 2:4])
+        channel_map = top_channel_act.squeeze().numpy()  # [14, 14]
+        im_ch = ax_channel.imshow(channel_map, cmap='hot', interpolation='bilinear')
+        ax_channel.set_title(f"Top GradCAM Channel #{top_channel_idx}\n(14×14 activation)",
+                            fontsize=12, fontweight='bold')
+        ax_channel.axis('off')
+        plt.colorbar(im_ch, ax=ax_channel, fraction=0.046, pad=0.04)
+
+        # Column 4+: Top feature importance distribution
+        ax_bar = fig.add_subplot(gs[0, 4:])
         importances = [imp for _, imp, _ in top_features]
         feature_indices = [f"F{idx}" for idx, _, _ in top_features]
         ax_bar.bar(range(len(importances)), importances, color='steelblue', alpha=0.8, edgecolor='navy')
         ax_bar.set_xlabel('Feature Index', fontsize=10)
         ax_bar.set_ylabel('Importance (sum of activations)', fontsize=10)
-        ax_bar.set_title(f'Top-{n_features} Feature Importance', fontsize=12, fontweight='bold')
+        ax_bar.set_title(f'Top-{n_features} CSAE Feature Importance\n(from channel #{top_channel_idx})',
+                        fontsize=12, fontweight='bold')
         ax_bar.set_xticks(range(len(importances)))
         ax_bar.set_xticklabels(feature_indices, rotation=45, ha='right', fontsize=8)
         ax_bar.grid(True, alpha=0.3, axis='y')
 
-        # Rows 1+: Individual features (2 columns per feature: activation map + saliency overlay)
+        # Rows 1+: Individual features (3 columns per feature: activation map + saliency overlay + masked)
         for i, ((feat_idx, importance, activation_map), saliency) in enumerate(zip(top_features, saliency_maps)):
-            row = 1 + i // 4  # 4 features per row
-            col_offset = (i % 4) * 2  # Each feature takes 2 columns
+            row = 1 + i // 3  # 3 features per row
+            col_offset = (i % 3) * 3  # Each feature takes 3 columns
 
             # Column 1: Feature activation map in hidden space (14×14)
             ax_act = fig.add_subplot(gs[row, col_offset])
@@ -468,17 +538,31 @@ class MultiChannelSAEVisualizer:
             cbar_sal = plt.colorbar(im_sal, ax=ax_sal, fraction=0.046, pad=0.04)
             cbar_sal.ax.tick_params(labelsize=6)
 
+            # Column 3: Masked image (show only salient regions)
+            ax_masked = fig.add_subplot(gs[row, col_offset + 2])
+            mask = saliency_norm > 0.5  # Threshold at 50%
+            image_resized = Image.fromarray(np.array(image)).resize((224, 224), Image.BILINEAR)
+            masked_img = np.array(image_resized).copy()
+            if len(masked_img.shape) == 3:
+                mask_3d = np.stack([mask, mask, mask], axis=-1)
+                masked_img[~mask_3d] = (masked_img[~mask_3d] * 0.3).astype(np.uint8)
+            else:
+                masked_img[~mask] = (masked_img[~mask] * 0.3).astype(np.uint8)
+            ax_masked.imshow(masked_img)
+            ax_masked.set_title(f"F{feat_idx} Salient Regions", fontsize=8, fontweight='bold')
+            ax_masked.axis('off')
+
         # Hide unused subplots
-        total_feature_cols = ((n_features + 3) // 4) * 4 * 2  # Round up to 4, then * 2 cols per feature
-        for i in range(n_features * 2, total_feature_cols):
+        total_feature_cols = ((n_features + 2) // 3) * 3 * 3  # Round up to 3, then * 3 cols per feature
+        for i in range(n_features * 3, total_feature_cols):
             row = 1 + i // n_cols
             col = i % n_cols
             if row < n_rows:
                 ax = fig.add_subplot(gs[row, col])
                 ax.axis('off')
 
-        plt.suptitle(f'Multi-Channel ConvSAE: Top-{n_features} Activated Features\n' +
-                    f'Left: Hidden Space Activations (14×14) | Right: Input Saliency Maps (224×224)',
+        plt.suptitle(f'Multi-Channel ConvSAE: Top-{n_features} Activated Features (GradCAM Channel #{top_channel_idx})\n' +
+                    f'Analysis based on highest-scoring GradCAM channel | Each row: Activation → Saliency → Masked Regions',
                     fontsize=14, fontweight='bold', y=0.998)
 
         if save_path:
@@ -510,6 +594,8 @@ class MultiChannelSAEVisualizer:
         image = results['image']
         image_tensor = results['image_tensor']
         top_features = results['top_features']
+        top_channel_idx = results['top_channel_idx']
+        top_channel_act = results['top_channel_act']
 
         # Compute saliency maps
         print(f"Computing saliency maps for {len(top_features)} features...")
@@ -521,31 +607,51 @@ class MultiChannelSAEVisualizer:
         print()
 
         # Create compact grid: each row shows [activation_map | saliency | overlay | masked]
+        # First row: Input image and top GradCAM channel
         n_features = len(top_features)
-        fig, axes = plt.subplots(n_features, 4, figsize=(18, 3 * n_features))
-        if n_features == 1:
-            axes = axes.reshape(1, -1)
+        fig, axes = plt.subplots(n_features + 1, 4, figsize=(18, 3 * (n_features + 1)))
 
+        # Row 0: Overview
+        axes[0, 0].imshow(image)
+        axes[0, 0].set_title('Input Image', fontsize=10, fontweight='bold')
+        axes[0, 0].axis('off')
+
+        channel_map = top_channel_act.squeeze().numpy()
+        im_ch = axes[0, 1].imshow(channel_map, cmap='hot', interpolation='bilinear')
+        axes[0, 1].set_title(f'Top GradCAM Channel #{top_channel_idx}\n(14×14 activation)',
+                            fontsize=10, fontweight='bold')
+        axes[0, 1].axis('off')
+        plt.colorbar(im_ch, ax=axes[0, 1], fraction=0.046, pad=0.04)
+
+        axes[0, 2].axis('off')
+        axes[0, 3].text(0.5, 0.5, f'Analyzing {n_features} CSAE features\nfrom channel #{top_channel_idx}',
+                       ha='center', va='center', fontsize=11, fontweight='bold',
+                       transform=axes[0, 3].transAxes)
+        axes[0, 3].axis('off')
+
+        # Rows 1+: Features
         for i, ((feat_idx, importance, activation_map), saliency) in enumerate(zip(top_features, saliency_maps)):
+            row_idx = i + 1  # Offset by 1 for header row
+
             # Column 0: Feature activation map in hidden space (14×14)
-            im0 = axes[i, 0].imshow(activation_map.numpy(), cmap='hot', interpolation='bilinear')
-            axes[i, 0].set_title(f"Feature {feat_idx}\nActivation (14×14)\nImportance: {importance:.2f}",
+            im0 = axes[row_idx, 0].imshow(activation_map.numpy(), cmap='hot', interpolation='bilinear')
+            axes[row_idx, 0].set_title(f"Feature {feat_idx}\nActivation (14×14)\nImportance: {importance:.2f}",
                                 fontsize=9, fontweight='bold')
-            axes[i, 0].axis('off')
-            plt.colorbar(im0, ax=axes[i, 0], fraction=0.046, pad=0.04)
+            axes[row_idx, 0].axis('off')
+            plt.colorbar(im0, ax=axes[row_idx, 0], fraction=0.046, pad=0.04)
 
             # Column 1: Saliency map (224×224)
             saliency_norm = saliency / (saliency.max() + 1e-8)
-            im1 = axes[i, 1].imshow(saliency_norm, cmap='jet')
-            axes[i, 1].set_title(f"Saliency Map\n(224×224)", fontsize=9, fontweight='bold')
-            axes[i, 1].axis('off')
-            plt.colorbar(im1, ax=axes[i, 1], fraction=0.046, pad=0.04)
+            im1 = axes[row_idx, 1].imshow(saliency_norm, cmap='jet')
+            axes[row_idx, 1].set_title(f"Saliency Map\n(224×224)", fontsize=9, fontweight='bold')
+            axes[row_idx, 1].axis('off')
+            plt.colorbar(im1, ax=axes[row_idx, 1], fraction=0.046, pad=0.04)
 
             # Column 2: Overlay on image
-            axes[i, 2].imshow(image, alpha=0.6)
-            axes[i, 2].imshow(saliency_norm, cmap='jet', alpha=0.4)
-            axes[i, 2].set_title(f"Saliency Overlay\non Input", fontsize=9, fontweight='bold')
-            axes[i, 2].axis('off')
+            axes[row_idx, 2].imshow(image, alpha=0.6)
+            axes[row_idx, 2].imshow(saliency_norm, cmap='jet', alpha=0.4)
+            axes[row_idx, 2].set_title(f"Saliency Overlay\non Input", fontsize=9, fontweight='bold')
+            axes[row_idx, 2].axis('off')
 
             # Column 3: Masked image (show only salient regions)
             mask = saliency_norm > 0.5  # Threshold at 50%, shape (224, 224)
@@ -561,11 +667,11 @@ class MultiChannelSAEVisualizer:
             else:  # Grayscale
                 masked_img[~mask] = (masked_img[~mask] * 0.3).astype(np.uint8)
 
-            axes[i, 3].imshow(masked_img)
-            axes[i, 3].set_title(f"Salient Regions\n(threshold=0.5)", fontsize=9, fontweight='bold')
-            axes[i, 3].axis('off')
+            axes[row_idx, 3].imshow(masked_img)
+            axes[row_idx, 3].set_title(f"Salient Regions\n(threshold=0.5)", fontsize=9, fontweight='bold')
+            axes[row_idx, 3].axis('off')
 
-        plt.suptitle(f'Multi-Channel ConvSAE Feature Analysis (Grid View)\n' +
+        plt.suptitle(f'Multi-Channel ConvSAE Feature Analysis (Grid View) - GradCAM Channel #{top_channel_idx}\n' +
                     f'Image: {Path(image_path).name} | Showing Top-{n_features} Features',
                     fontsize=14, fontweight='bold')
         plt.tight_layout()

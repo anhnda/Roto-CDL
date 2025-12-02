@@ -31,6 +31,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import Dict, List, Tuple
 from tqdm import tqdm
+import sys
+sys.path.append('.')
+from src.gradcam import GradCAM
 
 
 # ==========================================
@@ -306,14 +309,19 @@ class FeatureChannelSparsityLoss(nn.Module):
 
 class ResNet18ActivationExtractor:
     """
-    Extracts ALL 256 activation channels from ResNet18 layer3.
+    Extracts activation channels from ResNet18 layer3 with GradCAM-based selection.
 
-    Unlike the GradCAM-based approach, this extracts the full activation
-    tensor without channel selection, preserving all information.
+    For each image:
+    1. Compute GradCAM scores for all 256 channels at layer3
+    2. Select channels with cumulative score ≥ 80%
+    3. Zero-out unselected channels but keep them (maintain channel positions)
+
+    This approach preserves spatial structure while focusing on class-discriminative channels.
     """
 
-    def __init__(self, device='cuda'):
+    def __init__(self, device='cuda', cumulative_threshold=0.8):
         self.device = device
+        self.cumulative_threshold = cumulative_threshold
 
         # Load pretrained ResNet18
         self.model = models.resnet18(pretrained=True).to(device)
@@ -321,6 +329,9 @@ class ResNet18ActivationExtractor:
 
         # Target layer: layer3 (outputs 256 channels, 14×14 spatial resolution)
         self.target_layer = self.model.layer3
+
+        # GradCAM for channel importance
+        self.gradcam = GradCAM(self.model, self.target_layer)
 
         # Hook for activations
         self.activations = None
@@ -330,40 +341,106 @@ class ResNet18ActivationExtractor:
         """Forward hook to save activations."""
         self.activations = output.detach()
 
+    def _select_channels_with_gradcam(self, image: torch.Tensor, class_idx: int = None) -> torch.Tensor:
+        """
+        Use GradCAM to select important channels and create a binary mask.
+
+        Args:
+            image: [1, 3, 224, 224] - Input image
+            class_idx: Target class (None = use predicted class)
+
+        Returns:
+            channel_mask: [256] - Binary mask (1 for selected channels, 0 for others)
+        """
+        # Compute GradCAM channel weights
+        weights, _, pred_class = self.gradcam.forward(image, class_idx=class_idx, verbose=False)
+
+        # weights: [256] - GradCAM importance scores (already ReLU'd)
+
+        # Sort channels by importance (descending)
+        sorted_indices = torch.argsort(weights, descending=True)
+        sorted_weights = weights[sorted_indices]
+
+        # Normalize to get percentages
+        total_score = sorted_weights.sum()
+        if total_score > 0:
+            cumsum = torch.cumsum(sorted_weights / total_score, dim=0)
+
+            # Find number of channels needed for cumulative_threshold
+            num_selected = (cumsum < self.cumulative_threshold).sum().item() + 1
+            num_selected = min(num_selected, len(sorted_indices))
+        else:
+            # If all weights are zero, select top 10% channels
+            num_selected = max(1, int(0.1 * len(sorted_indices)))
+
+        # Create binary mask
+        channel_mask = torch.zeros(256, dtype=torch.bool, device=self.device)
+        selected_channels = sorted_indices[:num_selected]
+        channel_mask[selected_channels] = True
+
+        return channel_mask, num_selected
+
     def collect_activation_maps(
         self,
         data_loader: DataLoader,
         normalize: bool = True
     ) -> torch.Tensor:
         """
-        Collect activation maps from ALL 256 channels.
+        Collect activation maps with GradCAM-based channel selection.
+
+        For each image:
+        - Compute GradCAM scores for all 256 channels
+        - Select channels with cumulative score ≥ threshold (default 80%)
+        - Zero-out unselected channels but keep tensor shape [256, 14, 14]
 
         Args:
             data_loader: DataLoader with (image, label) pairs
             normalize: Apply robust normalization (99th percentile)
 
         Returns:
-            X: [N, 256, 14, 14] - All activation maps (one per image)
+            X: [N, 256, 14, 14] - Activation maps with selective zero-masking
         """
         all_activations = []
+        channel_selection_stats = []
 
-        print(f"Collecting activation maps from ResNet18 layer3 (256 channels, 14×14)...")
+        print(f"Collecting activation maps from ResNet18 layer3 with GradCAM selection...")
+        print(f"  Cumulative threshold: {self.cumulative_threshold * 100:.0f}%")
 
         for images, labels in tqdm(data_loader, desc="Extracting activations"):
-            images = images.to(self.device)
+            batch_activations = []
 
-            # Forward pass
-            with torch.no_grad():
-                _ = self.model(images)
+            for i in range(images.size(0)):
+                image = images[i:i+1].to(self.device)  # [1, 3, 224, 224]
 
-            # Get activations [B, 256, 14, 14]
-            activations = self.activations
+                # Forward pass to get activations
+                with torch.no_grad():
+                    _ = self.model(image)
+                    activations = self.activations.clone()  # [1, 256, 14, 14]
 
-            # Store
-            all_activations.append(activations.cpu())
+                # Get GradCAM-based channel mask (requires gradients)
+                channel_mask, num_selected = self._select_channels_with_gradcam(image)
+                channel_selection_stats.append(num_selected)
+
+                # Apply mask: zero-out unselected channels
+                # channel_mask: [256] -> reshape to [1, 256, 1, 1] for broadcasting
+                mask_4d = channel_mask.view(1, 256, 1, 1).float()
+                masked_activations = activations * mask_4d  # [1, 256, 14, 14]
+
+                batch_activations.append(masked_activations.cpu())
+
+            # Concatenate batch
+            all_activations.append(torch.cat(batch_activations, dim=0))
 
         # Concatenate all batches
         X = torch.cat(all_activations, dim=0)  # [N, 256, 14, 14]
+
+        # Print statistics
+        avg_selected = np.mean(channel_selection_stats)
+        std_selected = np.std(channel_selection_stats)
+        print(f"\nChannel selection statistics:")
+        print(f"  Average channels selected: {avg_selected:.1f} ± {std_selected:.1f} (out of 256)")
+        print(f"  Min: {min(channel_selection_stats)}, Max: {max(channel_selection_stats)}")
+        print(f"  Sparsity: {(256 - avg_selected) / 256 * 100:.1f}% channels zeroed out")
 
         print(f"\nCollected {X.shape[0]} activation maps:")
         print(f"  Shape: {X.shape}")
@@ -378,15 +455,20 @@ class ResNet18ActivationExtractor:
             for c in range(X.shape[1]):
                 channel_data = X[:, c, :, :]
 
+                # Skip channels that are all zeros (not selected by GradCAM)
+                if channel_data.abs().sum() < 1e-8:
+                    continue
+
                 # 99th percentile clipping
                 flat = channel_data.flatten()
-                num = min(1_000_000, flat.numel())
-                idx = torch.randint(0, flat.numel(), (num,))
-                scale_factor = torch.quantile(flat[idx], 0.99)
+                # Only compute quantile on non-zero values
+                non_zero_flat = flat[flat > 1e-8]
+                if len(non_zero_flat) > 0:
+                    scale_factor = torch.quantile(non_zero_flat, 0.99)
 
-                if scale_factor > 1e-8:
-                    channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
-                    X[:, c, :, :] = channel_data / (scale_factor + 1e-8)
+                    if scale_factor > 1e-8:
+                        channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+                        X[:, c, :, :] = channel_data / (scale_factor + 1e-8)
 
             print(f"  Normalized range: [{X.min():.4f}, {X.max():.4f}]")
             print(f"  Mean: {X.mean():.4f}, Std: {X.std():.4f}")
