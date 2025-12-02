@@ -245,12 +245,12 @@ if __name__ == "__main__":
     NUM_CLASSES = 10  # Imagenette
 
     # Loss weights
-    LAMBDA_SHARED_L1 = 0.01     # Sparsity for shared features
-    LAMBDA_CLASS_L1 = 0.01      # Sparsity for class features
-    LAMBDA_SHARED_LAT = 0.005   # Lateral inhibition for shared
-    LAMBDA_CLASS_LAT = 0.005    # Lateral inhibition for class
-    LAMBDA_CLASSIFICATION = 1.0 # Classification loss weight
-    LAMBDA_DIVERSITY = 0.1      # Diversity loss weight
+    LAMBDA_SHARED_L1 = 0.005    # Sparsity for shared features (reduced to allow more features)
+    LAMBDA_CLASS_L1 = 0.002     # Sparsity for class features (much lower - prioritize discrimination)
+    LAMBDA_SHARED_LAT = 0.002   # Lateral inhibition for shared
+    LAMBDA_CLASS_LAT = 0.001    # Lateral inhibition for class (reduced)
+    LAMBDA_CLASSIFICATION = 5.0 # Classification loss weight (INCREASED - make it priority)
+    LAMBDA_DIVERSITY = 0.5      # Diversity loss weight (INCREASED - force class separation)
 
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
@@ -309,10 +309,29 @@ if __name__ == "__main__":
     # ========================================
     print("\nStarting Dual ConvSAE Training...")
     print("=" * 70)
+    print("\nExpected Behavior & Tuning Guide:")
+    print("  • Classification Accuracy: Should reach 60-90% by epoch 10")
+    print("    - If stuck at ~10-20%: INCREASE lambda_classification (try 10.0)")
+    print("    - If >95%: Model might be overfitting, DECREASE lambda_class_l1")
+    print("  • Diversity Loss: Should decrease from ~1.0 to <0.5")
+    print("    - If stays >0.8: Classes using same features, INCREASE lambda_diversity")
+    print("    - If <0.2: Too much separation, may need more shared features")
+    print("  • Active Neurons: Target 5-15% for both pathways")
+    print("    - If <2%: Too sparse, DECREASE lambda_l1")
+    print("    - If >30%: Not sparse enough, INCREASE lambda_l1")
+    print("  • Reconstruction Loss: Should stay <0.01 (data normalized to [0,1])")
+    print("=" * 70 + "\n")
 
     for epoch in range(EPOCHS):
         epoch_metrics = {k: 0 for k in logs.keys()}
         n_batches = 0
+
+        # Warmup schedule for classification and diversity losses
+        # Start with lower weights and gradually increase to full strength
+        if epoch < 3:
+            warmup_factor = (epoch + 1) / 3  # 0.33, 0.67, 1.0
+        else:
+            warmup_factor = 1.0
 
         for batch_idx, (batch_acts, batch_labels) in enumerate(train_loader):
             batch_acts = batch_acts.to(device)
@@ -347,14 +366,15 @@ if __name__ == "__main__":
             loss_diversity = diversity_loss_fn(class_feats, batch_labels)
 
             # ===== COMBINED LOSS =====
+            # Apply warmup to classification and diversity losses
             loss = (
                 loss_total_recon +
                 LAMBDA_SHARED_L1 * loss_shared_l1 +
                 LAMBDA_CLASS_L1 * loss_class_l1 +
                 LAMBDA_SHARED_LAT * loss_shared_lat +
                 LAMBDA_CLASS_LAT * loss_class_lat +
-                LAMBDA_CLASSIFICATION * loss_classification +
-                LAMBDA_DIVERSITY * loss_diversity
+                warmup_factor * LAMBDA_CLASSIFICATION * loss_classification +
+                warmup_factor * LAMBDA_DIVERSITY * loss_diversity
             )
 
             # Backward pass
@@ -398,7 +418,8 @@ if __name__ == "__main__":
 
             # Print progress
             if batch_idx % 20 == 0:
-                print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
+                warmup_str = f" [Warmup: {warmup_factor:.2f}]" if warmup_factor < 1.0 else ""
+                print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}]{warmup_str} "
                       f"Loss: {loss.item():.4f} | Recon: {loss_total_recon.item():.4f} | "
                       f"Cls: {loss_classification.item():.4f} (Acc: {acc:.1f}%) | "
                       f"Div: {loss_diversity.item():.4f} | "
