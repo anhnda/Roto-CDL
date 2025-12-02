@@ -6,3 +6,8 @@
   # Compare multiple classes
   python check_same_class_csae.py --compare_classes tench church --num_images 10
   python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10 --use_resnet18 --dual_csae_path dual_csae_resnet18_model.pkl
+
+  python visualize_multichannel_sae.py --image_path data/imagenette/tench/n01440764_1.JPEG
+
+  # Comprehensive analysis on multiple images
+  python visualize_multichannel_sae.py --class_name tench --num_images 10 --grid_view
