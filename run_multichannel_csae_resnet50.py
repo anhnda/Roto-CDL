@@ -693,7 +693,7 @@ if __name__ == "__main__":
     TOP_K = 64              # Number of active features per spatial position
 
     # Loss weights
-    LAMBDA_L1 = 4           # L1 sparsity penalty
+    LAMBDA_L1 = 1          # L1 sparsity penalty
     LAMBDA_LAT = 0.0        # Lateral inhibition penalty
     LAMBDA_COMPACT = 0.0    # Spatial compactness penalty
     LAMBDA_CHANNEL_SPARSITY = 0.2  # Feature-channel sparsity penalty
