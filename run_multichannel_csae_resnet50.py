@@ -34,6 +34,7 @@ from tqdm import tqdm
 import sys
 sys.path.append('.')
 from src.gradcam import GradCAM
+from visualized_resnet50 import visualize_multichannel_sae_r50
 
 torch.cuda.init()
 # ==========================================
@@ -883,6 +884,17 @@ if __name__ == "__main__":
     visualize_learned_features(csae_model, num_features=64,
                                save_path='multichannel_csae_resnet50_features.png')
 
+    # Generate comprehensive ResNet50 SAE visualization
+    print("\nGenerating ResNet50 Multi-Channel SAE visualization...")
+    visualize_multichannel_sae_r50(
+        model=csae_model,
+        sample_activations=X,
+        num_samples=4,
+        num_channels_to_show=8,
+        num_features_to_show=16,
+        save_path='multichannel_sae_r50_visualization.png'
+    )
+
     print("\n" + "="*80)
     print("✓ All done! Outputs:")
     print("  - multichannel_csae_resnet50_model.pth")
@@ -890,4 +902,5 @@ if __name__ == "__main__":
     print("  - multichannel_csae_resnet50_training_info.pkl")
     print("  - multichannel_csae_resnet50_logs.png")
     print("  - multichannel_csae_resnet50_features.png")
+    print("  - multichannel_sae_r50_visualization.png")
     print("="*80)
