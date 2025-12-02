@@ -278,26 +278,41 @@ class MultiChannelSAEVisualizer:
         """
         Compute saliency map for a specific feature using gradient-based method.
 
+        Note: Uses continuous activations (without Top-K) for gradient computation
+        since Top-K is non-differentiable. The saliency still shows which input
+        regions contribute to this feature's activation.
+
         Args:
             image_tensor: [1, 3, 224, 224] - Preprocessed input image
             feature_idx: Index of the feature to visualize
-            activation_map: [14, 14] - Feature activation map
+            activation_map: [14, 14] - Feature activation map (unused, kept for API compatibility)
 
         Returns:
-            saliency: [224, 224] - Saliency map
+            saliency: [224, 224] - Saliency map showing input pixel importance
         """
         # Enable gradients
         image_tensor = image_tensor.clone().requires_grad_(True)
 
-        # Forward pass through ResNet18
-        _ = self.resnet(image_tensor)
-        layer3_acts = self.layer3_activations
+        # Forward pass through ResNet18 (without detaching)
+        # We need to manually extract layer3 output without hooks to preserve gradients
+        x = image_tensor
 
-        # Normalize activations
-        layer3_acts_norm = self._normalize_layer3_activations(layer3_acts)
+        # ResNet18 forward up to layer3
+        x = self.resnet.conv1(x)
+        x = self.resnet.bn1(x)
+        x = self.resnet.relu(x)
+        x = self.resnet.maxpool(x)
+
+        x = self.resnet.layer1(x)
+        x = self.resnet.layer2(x)
+        layer3_acts = self.resnet.layer3(x)  # [1, 256, 14, 14] - with gradients!
+
+        # Normalize activations (preserve gradients)
+        layer3_acts_norm = self._normalize_layer3_activations_with_grad(layer3_acts)
 
         # Forward through CSAE encoder (with Top-K)
-        _, sparse_features = self.csae_model(layer3_acts_norm, use_topk=True)
+        # Note: Top-K operation is not differentiable, so we'll use the continuous version
+        _, sparse_features = self.csae_model(layer3_acts_norm, use_topk=False)  # Don't use top-k for gradients
 
         # Get the target feature
         target_feature = sparse_features[0, feature_idx, :, :]  # [14, 14]
@@ -314,9 +329,40 @@ class MultiChannelSAEVisualizer:
         loss.backward()
 
         # Get gradient w.r.t. input image
+        if image_tensor.grad is None:
+            # If gradient is still None, return zeros
+            print(f"Warning: No gradient computed for feature {feature_idx}")
+            return torch.zeros(224, 224)
+
         saliency = image_tensor.grad.data.abs().sum(dim=1).squeeze()  # [224, 224]
 
         return saliency.cpu()
+
+    def _normalize_layer3_activations_with_grad(self, acts: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize layer3 activations preserving gradients.
+
+        Args:
+            acts: [1, 256, 14, 14] - Raw layer3 activations
+
+        Returns:
+            normalized: [1, 256, 14, 14] - Normalized activations (with gradients)
+        """
+        normalized = acts.clone()
+
+        # Normalize each channel independently
+        for c in range(acts.shape[1]):
+            channel_data = acts[0, c, :, :]
+
+            # Use max instead of quantile for differentiability
+            scale_factor = channel_data.max()
+
+            if scale_factor > 1e-8:
+                # Clamp operation (differentiable)
+                channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+                normalized[0, c, :, :] = channel_data / (scale_factor + 1e-8)
+
+        return normalized
 
     def visualize_top_features(self, image_path: str, top_k: int = 16,
                               save_path: str = None):
