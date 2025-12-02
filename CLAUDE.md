@@ -44,6 +44,15 @@ python check_same_class_csae.py --class_name tench --num_images 10
 # Compare ConvSAE features across multiple classes
 python check_same_class_csae.py --compare_classes tench church parachute --num_images 10
 
+# Analyze same-class Dual ConvSAE feature patterns (shared + class pathways)
+python check_same_class_dual_csae.py --class_name tench --num_images 10
+
+# Compare Dual ConvSAE features across multiple classes
+python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10
+
+# Use with ResNet18 backbone
+python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10 --use_resnet18 --dual_csae_path dual_csae_resnet18_model.pkl
+
 # View top activation maps with deconvolution
 python view_top_activation.py --image_path data/imagenette/tench/n01440764_1.JPEG
 python view_top_activation.py --class_name tench --num_images 3
@@ -584,6 +593,116 @@ Output:
 - `--num_images`: Number of images to sample per class (default: 10)
 - `--top_k_features`: Number of top features to track per image (default: 50)
 - `--cumulative_threshold`: GradCAM channel selection threshold (default: 0.8)
+
+## Analyzing Same-Class Dual ConvSAE Features
+
+The `check_same_class_dual_csae.py` script analyzes feature activation patterns in BOTH the shared pathway (global features) and class-specific pathway (discriminative features) of the Dual ConvSAE model. This validates that the dual-pathway architecture successfully separates common patterns from class-discriminative patterns.
+
+**Key Differences from Single ConvSAE Analysis:**
+- Analyzes **two separate pathways**: shared (global) and class-specific (discriminative)
+- Compares how shared vs class features differ in their activation patterns
+- Validates architectural design: shared pathway should capture common patterns, class pathway should capture discriminative patterns
+- Works with both AlexNet (`dual_csae_model.pkl`) and ResNet18 (`dual_csae_resnet18_model.pkl`) backbones
+
+### Single Class Analysis
+
+```bash
+# Analyze with AlexNet backbone
+python check_same_class_dual_csae.py --class_name tench --num_images 10
+
+# Analyze with ResNet18 backbone
+python check_same_class_dual_csae.py --class_name tench --num_images 10 --use_resnet18 --dual_csae_path dual_csae_resnet18_model.pkl
+```
+
+This will:
+1. Sample 10 images from the "tench" class
+2. For each image, extract activation maps using GradCAM
+3. Apply Dual CSAE to get sparse features from BOTH pathways
+4. Identify top-k activated features per pathway per image
+5. Compute feature frequency for both pathways
+6. Generate comprehensive visualization showing:
+   - Sample images from the class
+   - **Shared pathway**: Top 15 most frequently activated features (bar chart, green theme)
+   - **Class pathway**: Top 15 most frequently activated features (bar chart, orange theme)
+   - **Shared pathway heatmap**: Feature activation patterns across images (images × features matrix)
+   - **Class pathway heatmap**: Feature activation patterns across images (images × features matrix)
+   - Decoder weight distributions for both pathways
+
+Output: `same_class_dual_csae_analysis/{class_name}_dual_csae_analysis.png`
+
+**Visualization Structure:**
+- **Row 1**: Sample images + Shared features bar chart + Class features bar chart
+- **Rows 2-3**: Shared features heatmap (left) + Class features heatmap (right)
+- **Row 4**: Shared decoder weights histogram + Class decoder weights histogram
+
+### Cross-Class Comparison
+
+```bash
+# Compare with AlexNet backbone
+python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10
+
+# Compare with ResNet18 backbone
+python check_same_class_dual_csae.py --compare_classes tench church parachute --num_images 10 --use_resnet18 --dual_csae_path dual_csae_resnet18_model.pkl
+```
+
+This will:
+1. Analyze each class independently (as above)
+2. Build feature-class activation matrices for BOTH pathways
+3. Identify class-specific features in the class pathway
+4. Generate comprehensive comparison visualization showing:
+   - **Top half**: Shared features across classes (heatmap + per-class summary)
+   - **Bottom half**: Class-specific features across classes (heatmap + top discriminative features)
+
+Output:
+- Individual class analyses: `same_class_dual_csae_analysis/{class_name}_dual_csae_analysis.png`
+- Comparison: `same_class_dual_csae_analysis/class_comparison_dual_csae.png`
+
+**Visualization Structure:**
+- **Top row**: Shared features heatmap (left, 60 features × classes) + per-class average activation (right)
+- **Bottom row**: Class features heatmap (left, 60 features × classes) + top 12 class-specific features (right)
+
+### Interpretation
+
+**Shared Pathway Analysis:**
+- **High cross-class activation**: Features that activate strongly across ALL classes represent global patterns (edges, textures, low-level features)
+- **Similar activation across classes**: Validates that shared pathway captures commonalities, not class-discriminative patterns
+- **Balanced activation**: All classes should activate shared features roughly equally
+
+**Class Pathway Analysis:**
+- **High-frequency features** (appearing in >70% of same-class images): Represent consistent class-specific patterns
+- **Class-specific features** (high specificity score): Strongly discriminative, activate for one class but not others
+- **Vertical bands in heatmap**: Indicate features consistently used by specific classes (good class separation)
+- **Low cross-class activation**: Validates that class pathway learns discriminative patterns
+
+**Validation Metrics:**
+- **Good separation**: Shared features have low specificity scores (used by all classes), class features have high specificity scores (used by specific classes)
+- **Classification accuracy**: Should be 60-90% if class pathway is learning discriminative features
+- **Diversity loss**: Should decrease during training, indicating classes use different features
+
+### Parameters
+
+- `--num_images`: Number of images to sample per class (default: 10)
+- `--top_k_features`: Number of top features to track per image (default: 50)
+- `--cumulative_threshold`: GradCAM channel selection threshold (default: 0.8)
+- `--use_resnet18`: Use ResNet18 backbone instead of AlexNet (flag)
+- `--dual_csae_path`: Path to dual CSAE model (default: `dual_csae_model.pkl`)
+- `--model_path`: Path to fine-tuned AlexNet model (default: `weights/finetune_weights.pth`, ignored if using ResNet18)
+- `--data_dir`: Path to Imagenette dataset (default: `data/imagenette`)
+
+### Use Cases
+
+**When to use Dual ConvSAE analysis:**
+1. **Validate architecture**: Confirm that shared and class pathways learn different types of features
+2. **Feature interpretability**: Understand which features are global (shared) vs discriminative (class)
+3. **Cross-class analysis**: Identify which class-specific features distinguish between classes
+4. **Model debugging**: Check if class pathway is learning meaningful discriminative patterns (high specificity scores)
+5. **Backbone comparison**: Compare AlexNet vs ResNet18 feature learning
+
+**Expected patterns:**
+- **Shared features**: Should show similar activation levels across all classes (low variance)
+- **Class features**: Should show high activation for one class, low for others (high variance)
+- **Feature overlap**: Minimal overlap between classes in the class pathway (good separation)
+- **Decoder weights**: Class pathway weights should be more diverse than shared pathway weights
 
 ## Common Modifications
 
