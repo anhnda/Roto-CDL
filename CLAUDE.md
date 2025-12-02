@@ -22,6 +22,9 @@ python run_csae.py
 # Run the Dual ConvSAE training pipeline (shared + class-discriminative features)
 python run_dual_csae.py
 
+# Run Dual ConvSAE with ResNet18 backbone (14×14 activation maps, no fine-tuning)
+python run_dual_csae_resnet18.py
+
 # Generate explanations for model predictions (using CDL dictionary)
 python explain.py
 
@@ -213,6 +216,60 @@ Alternative approach to dictionary learning using a neural network-based sparse 
     - You want a simpler, faster model
     - Class labels are unavailable
     - Task is unsupervised feature discovery
+
+#### Dual ConvSAE with ResNet18 Backbone (`run_dual_csae_resnet18.py`)
+**Alternative to fine-tuned AlexNet**: Uses pretrained ResNet18 (ImageNet-1k) without fine-tuning.
+
+**Key Advantages**:
+- **No fine-tuning required**: Uses pretrained ImageNet weights directly
+- **Better features**: ResNet18 provides stronger pretrained representations than AlexNet
+- **Larger spatial resolution**: 14×14 activation maps (vs 13×13 for AlexNet layer 5)
+- **More channels**: 256 channels from layer3 (vs variable for AlexNet)
+
+**Architecture Details**:
+- **Backbone**: ResNet18 pretrained on ImageNet-1k (1000 classes)
+- **Target Layer**: `layer3` - outputs 256 channels at 14×14 spatial resolution
+- **Class Mapping**: Maps ImageNet-1k predictions to Imagenette-10 classes
+  - Tench → ImageNet class 0
+  - English Springer Spaniel → ImageNet class 217
+  - Cassette Player → ImageNet class 482
+  - Chain Saw → ImageNet class 491
+  - Church → ImageNet class 497
+  - Gas Pump → ImageNet class 571
+  - Garbage Truck → ImageNet class 569
+  - Golf Ball → ImageNet class 574
+  - Parachute → ImageNet class 701
+
+**Activation Extraction Pipeline**:
+1. For each image, get predicted Imagenette class from ImageNet-1k predictions
+2. Use GradCAM on layer3 to compute channel importance for that class
+3. Select top 90% of channels by cumulative GradCAM score
+4. Average selected channels to create single-channel class-discriminative activation map
+5. Apply robust normalization (99th percentile scaling)
+
+**Training Configuration** (same as AlexNet version):
+- `shared_dim=256`, `class_dim=256`
+- `kernel_size=3` (3×3 convolution)
+- Optimized loss weights for discrimination
+- 15 epochs with warmup
+
+**Output Files**:
+- `dual_csae_resnet18_model.pth`: Model state dict
+- `dual_csae_resnet18_model.pkl`: Full model (joblib)
+- `dual_csae_resnet18_training_info.pkl`: Training config and logs
+- `dual_csae_resnet18_logs.png`: Training diagnostics
+- `dual_csae_resnet18_features.png`: Feature visualizations
+
+**When to Use ResNet18 vs AlexNet**:
+- Use **ResNet18** when:
+  - You don't want to fine-tune a model
+  - You want stronger pretrained features
+  - You want faster iteration (no fine-tuning step)
+  - You have limited training data
+- Use **AlexNet** when:
+  - You already have a fine-tuned model
+  - You want features specifically adapted to your dataset
+  - You need exact compatibility with existing pipelines
 
 #### Sparse Coding Inference (`src/batch_cdl_large.py:solve_sparse_code`)
 - Given learned dictionary Phi, solves for sparse code Z
