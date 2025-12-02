@@ -251,6 +251,51 @@ class SpatialCompactnessLoss(nn.Module):
         return tv_loss
 
 
+class FeatureChannelSparsityLoss(nn.Module):
+    """
+    Feature-Channel Sparsity Loss.
+
+    Encourages each learned feature to respond to only a few of the 256 input channels.
+    This makes features more interpretable by ensuring they correspond to specific
+    combinations of input channels, rather than using all channels.
+
+    Similar to how SAE features in LLM interpretability are encouraged to activate
+    for specific token patterns, we encourage features to activate for specific
+    channel combinations.
+
+    Implementation:
+        For each feature (row in encoder weight matrix), compute L1 norm across
+        input channels. Penalize features that have large L1 norms (use many channels).
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, encoder_weight: torch.Tensor) -> torch.Tensor:
+        """
+        Compute feature-channel sparsity loss.
+
+        Args:
+            encoder_weight: [out_channels, in_channels, k, k] - Encoder weights
+                           For 1×1 conv: [4096, 256, 1, 1]
+
+        Returns:
+            sparsity_loss: Scalar - Feature-channel sparsity penalty
+        """
+        # Squeeze spatial dimensions for 1×1 conv: [4096, 256]
+        weight = encoder_weight.squeeze()
+
+        # For each feature (row), compute L1 norm across input channels
+        # This measures how many input channels each feature uses
+        feature_channel_usage = weight.abs().sum(dim=1)  # [4096]
+
+        # Penalize features that use many channels
+        # Mean over all features
+        sparsity_loss = feature_channel_usage.mean()
+
+        return sparsity_loss
+
+
 # ==========================================
 # ResNet18 Activation Extractor
 # ==========================================
@@ -351,10 +396,11 @@ class ResNet18ActivationExtractor:
 
 def plot_training_logs(logs: Dict[str, List], save_path: str = 'multichannel_csae_logs.png'):
     """Plot training metrics."""
-    fig, axs = plt.subplots(2, 4, figsize=(20, 8))
+    fig, axs = plt.subplots(3, 3, figsize=(18, 12))
     fig.suptitle('Multi-Channel ConvSAE Training (ResNet18 - 256 Channels + Top-K)',
                  fontsize=14, fontweight='bold')
 
+    # Row 1: Main losses
     # Reconstruction loss
     axs[0, 0].plot(logs["recon_loss"], color='blue', linewidth=1.5)
     axs[0, 0].set_title("Reconstruction Loss")
@@ -364,60 +410,70 @@ def plot_training_logs(logs: Dict[str, List], save_path: str = 'multichannel_csa
 
     # L1 sparsity loss
     axs[0, 1].plot(logs["l1_loss"], color='green', linewidth=1.5)
-    axs[0, 1].set_title("L1 Sparsity Loss")
+    axs[0, 1].set_title("L1 Sparsity Loss (Feature Activation)")
     axs[0, 1].set_ylabel("L1")
     axs[0, 1].set_xlabel("Batch")
     axs[0, 1].grid(True, alpha=0.3)
 
-    # Lateral inhibition loss
-    axs[0, 2].plot(logs["lateral_loss"], color='orange', linewidth=1.5)
-    axs[0, 2].set_title("Lateral Inhibition Loss")
-    axs[0, 2].set_ylabel("Correlation")
+    # Channel sparsity loss
+    axs[0, 2].plot(logs["channel_sparsity_loss"], color='purple', linewidth=1.5)
+    axs[0, 2].set_title("Channel Sparsity Loss (Encoder Weights)")
+    axs[0, 2].set_ylabel("L1 per feature")
     axs[0, 2].set_xlabel("Batch")
     axs[0, 2].grid(True, alpha=0.3)
 
-    # Spatial compactness loss
-    axs[0, 3].plot(logs["compact_loss"], color='red', linewidth=1.5)
-    axs[0, 3].set_title("Spatial Compactness Loss (TV)")
-    axs[0, 3].set_ylabel("Total Variation")
-    axs[0, 3].set_xlabel("Batch")
-    axs[0, 3].grid(True, alpha=0.3)
-
-    # Active neurons percentage
-    axs[1, 0].plot(logs["active_pct"], color='purple', linewidth=1.5)
-    axs[1, 0].set_title("Active Neurons % (Top-K enforced)")
-    axs[1, 0].set_ylabel("Percent (%)")
+    # Row 2: Regularization losses
+    # Lateral inhibition loss
+    axs[1, 0].plot(logs["lateral_loss"], color='orange', linewidth=1.5)
+    axs[1, 0].set_title("Lateral Inhibition Loss")
+    axs[1, 0].set_ylabel("Correlation")
     axs[1, 0].set_xlabel("Batch")
-    axs[1, 0].set_ylim(0, 10)
     axs[1, 0].grid(True, alpha=0.3)
 
-    # Total loss
-    axs[1, 1].plot(logs["total_loss"], color='black', linewidth=2)
-    axs[1, 1].set_title("Total Loss")
-    axs[1, 1].set_ylabel("Loss")
+    # Spatial compactness loss
+    axs[1, 1].plot(logs["compact_loss"], color='red', linewidth=1.5)
+    axs[1, 1].set_title("Spatial Compactness Loss (TV)")
+    axs[1, 1].set_ylabel("Total Variation")
     axs[1, 1].set_xlabel("Batch")
     axs[1, 1].grid(True, alpha=0.3)
 
-    # Loss components (log scale)
-    axs[1, 2].plot(logs["recon_loss"], label='Reconstruction', alpha=0.7)
-    axs[1, 2].plot(logs["l1_loss"], label='L1 Sparsity', alpha=0.7)
-    axs[1, 2].plot(logs["lateral_loss"], label='Lateral Inhibition', alpha=0.7)
-    axs[1, 2].plot(logs["compact_loss"], label='Compactness', alpha=0.7)
-    axs[1, 2].set_title("Loss Components (Log Scale)")
-    axs[1, 2].set_ylabel("Loss")
+    # Active neurons percentage
+    axs[1, 2].plot(logs["active_pct"], color='teal', linewidth=1.5)
+    axs[1, 2].set_title("Active Neurons % (Top-K enforced)")
+    axs[1, 2].set_ylabel("Percent (%)")
     axs[1, 2].set_xlabel("Batch")
-    axs[1, 2].set_yscale('log')
-    axs[1, 2].legend(fontsize=8)
+    axs[1, 2].set_ylim(0, 10)
     axs[1, 2].grid(True, alpha=0.3)
 
-    # Reconstruction vs Compactness trade-off
-    axs[1, 3].scatter(logs["compact_loss"], logs["recon_loss"],
+    # Row 3: Summary metrics
+    # Total loss
+    axs[2, 0].plot(logs["total_loss"], color='black', linewidth=2)
+    axs[2, 0].set_title("Total Loss")
+    axs[2, 0].set_ylabel("Loss")
+    axs[2, 0].set_xlabel("Batch")
+    axs[2, 0].grid(True, alpha=0.3)
+
+    # Loss components (log scale)
+    axs[2, 1].plot(logs["recon_loss"], label='Recon', alpha=0.7)
+    axs[2, 1].plot(logs["l1_loss"], label='L1', alpha=0.7)
+    axs[2, 1].plot(logs["lateral_loss"], label='Lateral', alpha=0.7)
+    axs[2, 1].plot(logs["compact_loss"], label='Compact', alpha=0.7)
+    axs[2, 1].plot(logs["channel_sparsity_loss"], label='Ch-Sp', alpha=0.7)
+    axs[2, 1].set_title("Loss Components (Log Scale)")
+    axs[2, 1].set_ylabel("Loss")
+    axs[2, 1].set_xlabel("Batch")
+    axs[2, 1].set_yscale('log')
+    axs[2, 1].legend(fontsize=7)
+    axs[2, 1].grid(True, alpha=0.3)
+
+    # Reconstruction vs Channel Sparsity trade-off
+    axs[2, 2].scatter(logs["channel_sparsity_loss"], logs["recon_loss"],
                      c=range(len(logs["recon_loss"])), cmap='viridis',
                      alpha=0.5, s=5)
-    axs[1, 3].set_title("Reconstruction vs Compactness")
-    axs[1, 3].set_xlabel("Compactness Loss")
-    axs[1, 3].set_ylabel("Reconstruction Loss")
-    axs[1, 3].grid(True, alpha=0.3)
+    axs[2, 2].set_title("Reconstruction vs Channel Sparsity")
+    axs[2, 2].set_xlabel("Channel Sparsity Loss")
+    axs[2, 2].set_ylabel("Reconstruction Loss")
+    axs[2, 2].grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -553,6 +609,7 @@ if __name__ == "__main__":
     LAMBDA_L1 = 0.01        # L1 sparsity penalty (reduced since top-k enforces hard sparsity)
     LAMBDA_LAT = 0.01       # Lateral inhibition penalty
     LAMBDA_COMPACT = 0.1    # Spatial compactness penalty (Total Variation)
+    LAMBDA_CHANNEL_SPARSITY = 0.05  # Feature-channel sparsity penalty (each feature uses few channels)
 
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
@@ -568,6 +625,7 @@ if __name__ == "__main__":
     print(f"  Lambda L1: {LAMBDA_L1}")
     print(f"  Lambda Lateral: {LAMBDA_LAT}")
     print(f"  Lambda Compactness: {LAMBDA_COMPACT}")
+    print(f"  Lambda Channel Sparsity: {LAMBDA_CHANNEL_SPARSITY}")
     print(f"  Learning Rate: {LR}")
     print(f"  Epochs: {EPOCHS}")
     print(f"  Batch Size: {BATCH_SIZE}")
@@ -583,6 +641,7 @@ if __name__ == "__main__":
     optimizer = optim.Adam(csae_model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     lat_inhib_loss = LateralInhibitionLoss().to(device)
     compact_loss_fn = SpatialCompactnessLoss().to(device)
+    channel_sparsity_loss_fn = FeatureChannelSparsityLoss().to(device)
 
     # Create DataLoader
     dataset = TensorDataset(X)
@@ -595,6 +654,7 @@ if __name__ == "__main__":
         "l1_loss": [],
         "lateral_loss": [],
         "compact_loss": [],
+        "channel_sparsity_loss": [],
         "active_pct": []
     }
 
@@ -629,12 +689,14 @@ if __name__ == "__main__":
             loss_l1 = sparse_features.abs().mean()
             loss_lateral = lat_inhib_loss(sparse_features)
             loss_compact = compact_loss_fn(sparse_features)
+            loss_channel_sparsity = channel_sparsity_loss_fn(csae_model.encoder.weight)
 
             # Combined loss
             loss = (loss_recon +
                    LAMBDA_L1 * loss_l1 +
                    LAMBDA_LAT * loss_lateral +
-                   LAMBDA_COMPACT * loss_compact)
+                   LAMBDA_COMPACT * loss_compact +
+                   LAMBDA_CHANNEL_SPARSITY * loss_channel_sparsity)
 
             # Backward pass
             loss.backward()
@@ -653,6 +715,7 @@ if __name__ == "__main__":
                 logs["l1_loss"].append(loss_l1.item())
                 logs["lateral_loss"].append(loss_lateral.item())
                 logs["compact_loss"].append(loss_compact.item())
+                logs["channel_sparsity_loss"].append(loss_channel_sparsity.item())
                 logs["active_pct"].append(active_pct)
 
                 for k in epoch_metrics.keys():
@@ -663,7 +726,7 @@ if __name__ == "__main__":
             if batch_idx % 20 == 0:
                 print(f"\rEpoch {epoch+1}/{EPOCHS} [{batch_idx}/{len(train_loader)}] "
                       f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
-                      f"L1: {loss_l1.item():.4f} | Compact: {loss_compact.item():.4f} | "
+                      f"Ch-Sp: {loss_channel_sparsity.item():.4f} | "
                       f"Active: {active_pct:.1f}%", end="")
 
         # Epoch summary
@@ -675,6 +738,7 @@ if __name__ == "__main__":
         print(f"  L1 Sparsity: {avg_metrics['l1_loss']:.4f}")
         print(f"  Lateral Inhibition: {avg_metrics['lateral_loss']:.4f}")
         print(f"  Spatial Compactness: {avg_metrics['compact_loss']:.4f}")
+        print(f"  Channel Sparsity: {avg_metrics['channel_sparsity_loss']:.4f}")
         print(f"  Active Neurons: {avg_metrics['active_pct']:.2f}% (Target: {TOP_K/HIDDEN_DIM*100:.1f}%)")
 
         # Check sparsity target (with top-k, should be close to TOP_K/HIDDEN_DIM)
@@ -710,6 +774,7 @@ if __name__ == "__main__":
             'lambda_l1': LAMBDA_L1,
             'lambda_lateral': LAMBDA_LAT,
             'lambda_compact': LAMBDA_COMPACT,
+            'lambda_channel_sparsity': LAMBDA_CHANNEL_SPARSITY,
             'lr': LR,
             'epochs': EPOCHS,
             'batch_size': BATCH_SIZE,
