@@ -477,7 +477,7 @@ if __name__ == "__main__":
     LAMBDA_SHARED_LAT = 0.00
     LAMBDA_CLASS_LAT = 0.00
     LAMBDA_CLASSIFICATION = 10.0
-    LAMBDA_DIVERSITY = 0.5
+    LAMBDA_DIVERSITY = 2
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
