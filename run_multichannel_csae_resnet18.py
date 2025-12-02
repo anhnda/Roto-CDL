@@ -547,7 +547,7 @@ if __name__ == "__main__":
     INPUT_CHANNELS = 256    # All ResNet18 layer3 channels
     HIDDEN_DIM = 4096       # Sparse feature dimension (16× expansion)
     KERNEL_SIZE = 1         # 1×1 conv for channel-wise features
-    TOP_K = 32              # Number of active features per spatial position
+    TOP_K = 16              # Number of active features per spatial position
 
     # Loss weights
     LAMBDA_L1 = 0.01        # L1 sparsity penalty (reduced since top-k enforces hard sparsity)
