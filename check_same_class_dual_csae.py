@@ -21,7 +21,6 @@ Usage:
 """
 
 import torch
-import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -29,7 +28,7 @@ import seaborn as sns
 from torchvision import datasets, transforms
 import torchvision.models as models
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import argparse
 import os
 import joblib
@@ -79,6 +78,20 @@ class ResNet18Wrapper:
 
     def eval(self):
         self.model.eval()
+        return self
+
+    def zero_grad(self):
+        """Delegate zero_grad to underlying model."""
+        self.model.zero_grad()
+        return self
+
+    def parameters(self):
+        """Delegate parameters to underlying model."""
+        return self.model.parameters()
+
+    def train(self, mode=True):
+        """Delegate train to underlying model."""
+        self.model.train(mode)
         return self
 
 
@@ -161,9 +174,9 @@ class SameClassDualCSAEAnalyzer:
         if self.use_resnet18:
             # Map to ImageNet class for ResNet18
             imagenet_class_idx = IMAGENETTE_TO_IMAGENET[self.class_names[class_idx]]
-            channel_weights, cam_map, _ = self.gradcam.forward(image, imagenet_class_idx)
+            channel_weights, _, _ = self.gradcam.forward(image, imagenet_class_idx)
         else:
-            channel_weights, cam_map, _ = self.gradcam.forward(image, class_idx)
+            channel_weights, _, _ = self.gradcam.forward(image, class_idx)
 
         activation_maps = self.gradcam.activations  # [1, C, H, W]
 
@@ -191,7 +204,7 @@ class SameClassDualCSAEAnalyzer:
 
             # Pass through Dual CSAE
             with torch.no_grad():
-                reconstruction, shared_features, class_features, _ = self.dual_csae_model(act_map_norm)
+                _, shared_features, class_features, _ = self.dual_csae_model(act_map_norm)
 
             # Get feature importance for this channel
             # shared_features: [1, shared_dim, H, W]
@@ -273,7 +286,7 @@ class SameClassDualCSAEAnalyzer:
         class_importance = defaultdict(list)
 
         for idx, img_idx in enumerate(sampled_indices):
-            img_path, label = self.dataset.samples[img_idx]
+            img_path, _ = self.dataset.samples[img_idx]
             image = self.dataset[img_idx][0].unsqueeze(0)  # Add batch dimension
 
             print(f"[{idx+1}/{num_samples}] Processing image {img_idx}...")
