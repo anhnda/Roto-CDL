@@ -174,6 +174,7 @@ class ResNet18ActivationExtractor:
         """
         all_activations = []
         all_labels = []
+        n_selected_channels = []  # Track number of selected channels per image
 
         print(f"Collecting activation maps from ResNet18 layer3 (14×14)...")
 
@@ -199,6 +200,9 @@ class ResNet18ActivationExtractor:
                 n_selected = (cumsum <= top_k_percentile * total).sum().item() + 1
                 selected_channels = sorted_indices[:n_selected]
 
+                # Track number of selected channels
+                n_selected_channels.append(n_selected)
+
                 # Extract activation maps from selected channels
                 selected_acts = activations[0, selected_channels, :, :]  # [n_selected, 14, 14]
 
@@ -213,6 +217,20 @@ class ResNet18ActivationExtractor:
         # avg_act already has shape [1, 14, 14], so stack gives [N, 1, 14, 14]
         X = torch.stack(all_activations)  # [N, 1, 14, 14]
         Y = torch.tensor(all_labels, dtype=torch.long)
+
+        # Print channel selection statistics
+        n_selected_array = np.array(n_selected_channels)
+        print(f"\nChannel Selection Statistics (out of 256 total channels):")
+        print(f"  Average channels selected per image: {n_selected_array.mean():.2f}")
+        print(f"  Std dev: {n_selected_array.std():.2f}")
+        print(f"  Min: {n_selected_array.min()}")
+        print(f"  Max: {n_selected_array.max()}")
+        print(f"  Median: {np.median(n_selected_array):.0f}")
+        print(f"  Percentile (25%, 50%, 75%): "
+              f"{np.percentile(n_selected_array, 25):.0f}, "
+              f"{np.percentile(n_selected_array, 50):.0f}, "
+              f"{np.percentile(n_selected_array, 75):.0f}")
+        print(f"  Selection ratio: {n_selected_array.mean()/256*100:.1f}% of all channels")
 
         # Robust normalization
         if normalize:
