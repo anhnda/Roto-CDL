@@ -1,11 +1,13 @@
 """
-Multi-Channel ConvSAE Visualization Script (ResNet50)
+Multi-Channel ConvSAE Visualization Script (ResNet50) - Two-Level Sparsity
 
 For a given input image:
 1. Extract ResNet50 layer3 activations (1024 channels, 14×14)
 2. Use GradCAM to select top channels with 80% cumulative score
 3. Mask other channels (zero them out)
-4. Feed masked activations to trained Multi-Channel ConvSAE
+4. Feed masked activations to trained Multi-Channel ConvSAE with two-level sparsity:
+   - Level 1 (Channel): Top-k channel selection based on spatial activation sum
+   - Level 2 (Spatial): L1-sparse activations within selected channels
 5. Obtain high-dimensional encoding activations (8192 features)
 6. Select top-k most activated feature maps (e.g., top 16 out of 8192)
 7. Visualize these feature maps directly (14×14 heatmaps)
@@ -44,12 +46,16 @@ from src.gradcam import GradCAM
 class MultiChannelSAEVisualizerR50:
     """
     Visualizer for Multi-Channel ConvSAE learned features (ResNet50 backbone).
+    Uses model with two-level sparsity mechanism.
 
     For each input image:
     1. Extracts ResNet50 layer3 activations (1024 channels, 14×14)
     2. Uses GradCAM to select top channels with 80% cumulative score
     3. Masks other channels (zeros them out)
     4. Passes masked activations through CSAE to get sparse features (8192 features)
+       - CSAE applies two-level sparsity:
+         a) Channel-level: Top-k channel selection based on sum of spatial activations
+         b) Spatial-level: L1-sparse activations within selected channels
     5. Selects top-k most activated feature maps
     6. Visualizes feature maps directly as 14×14 heatmaps
     """
@@ -174,14 +180,18 @@ class MultiChannelSAEVisualizerR50:
 
     def extract_features(self, image_path: str, top_k: int = 16) -> Dict:
         """
-        Extract top-k activated features for an input image using GradCAM channel selection.
+        Extract top-k activated features for an input image using GradCAM channel selection
+        and two-level sparsity.
 
         Pipeline:
         1. Use GradCAM to select channels with 80% cumulative score
         2. Mask other channels (zero them out)
         3. Normalize selected channels
         4. Pass through CSAE to get sparse features (8192 features)
-        5. Select top-k most activated feature maps
+           - CSAE encoder applies two-level sparsity:
+             a) Channel-level: Ranks features by sum(H×W), keeps top-k channels
+             b) Spatial-level: Within selected channels, L1 regularization creates sparse patterns
+        5. Select top-k most activated feature maps (ranked by spatial sum)
 
         Args:
             image_path: Path to input image
@@ -196,7 +206,7 @@ class MultiChannelSAEVisualizerR50:
                 - num_selected_channels: Number of channels selected by GradCAM
                 - channel_mask: Binary mask [1024] for selected channels
                 - channel_weights: GradCAM weights [1024]
-                - sparse_features: CSAE sparse features [1, 8192, 14, 14]
+                - sparse_features: CSAE sparse features [1, 8192, 14, 14] (two-level sparse)
                 - top_features: List of (feature_idx, importance, activation_map)
         """
         # Load and preprocess image
@@ -221,11 +231,14 @@ class MultiChannelSAEVisualizerR50:
         # Normalize masked activations (same as training)
         layer3_masked_norm = self._normalize_layer3_activations(layer3_masked)
 
-        # Pass through CSAE encoder (with Top-K activation)
+        # Pass through CSAE encoder (with Two-Level Sparsity)
+        # Level 1: Top-k channel selection based on sum(H×W) per feature
+        # Level 2: L1-sparse spatial activations within selected channels
         with torch.no_grad():
             _, sparse_features = self.csae_model(layer3_masked_norm, use_topk=True)
 
-        # Compute feature importance (sum of activations per feature)
+        # Compute feature importance (sum of activations per feature channel)
+        # This ranks features by their total spatial activation (same criterion used for channel selection)
         # sparse_features: [1, 8192, 14, 14]
         feature_importance = sparse_features.sum(dim=(2, 3)).squeeze()  # [8192]
 

@@ -1,9 +1,13 @@
 """
-Visualization utilities for ResNet50 Multi-Channel ConvSAE.
+Visualization utilities for ResNet50 Multi-Channel ConvSAE (Two-Level Sparsity).
 
 This module provides comprehensive visualization functions for analyzing
 the learned features and behavior of the Multi-Channel Convolutional
 Sparse Autoencoder trained on ResNet50 layer3 activations.
+
+The model uses two-level sparsity:
+- Level 1 (Channel): Top-k channel selection based on sum of spatial activations
+- Level 2 (Spatial): L1-sparse activations within selected channels
 """
 
 import torch
@@ -21,17 +25,21 @@ def visualize_multichannel_sae_r50(
     save_path: str = 'multichannel_sae_r50_visualization.png'
 ):
     """
-    Comprehensive visualization of ResNet50 Multi-Channel SAE.
+    Comprehensive visualization of ResNet50 Multi-Channel SAE with two-level sparsity.
+
+    The model applies two-level sparsity during encoding:
+    - Level 1 (Channel): Ranks features by sum(H×W), keeps top-k channels
+    - Level 2 (Spatial): L1-sparse activations within selected channels
 
     Shows:
     1. Sample input activation maps (selected channels from ResNet50 layer3)
     2. SAE reconstructions
-    3. Top activated sparse features
+    3. Top activated sparse features (after two-level sparsity)
     4. Feature activation spatial patterns
     5. Channel-wise reconstruction quality
 
     Args:
-        model: Trained MultiChannelConvSAE model
+        model: Trained MultiChannelConvSAE model with two-level sparsity
         sample_activations: [N, 1024, 14, 14] - Sample activation maps from ResNet50 layer3
         num_samples: Number of sample images to visualize
         num_channels_to_show: Number of input channels to display per sample
@@ -56,7 +64,7 @@ def visualize_multichannel_sae_r50(
 
     # Create comprehensive figure
     fig = plt.figure(figsize=(20, 5 * num_samples))
-    fig.suptitle('ResNet50 Multi-Channel SAE Visualization', fontsize=16, fontweight='bold')
+    fig.suptitle('ResNet50 Multi-Channel SAE Visualization (Two-Level Sparsity)', fontsize=16, fontweight='bold')
 
     for i in range(num_samples):
         base_row = i * 4
@@ -183,7 +191,7 @@ def visualize_feature_decoder_weights(
 
     # Create visualization
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('ResNet50 Decoder Feature Weights Analysis', fontsize=14, fontweight='bold')
+    fig.suptitle('ResNet50 Decoder Feature Weights Analysis (Two-Level Sparsity)', fontsize=14, fontweight='bold')
 
     # 1. Heatmap of top features
     ax = axes[0, 0]
@@ -265,7 +273,7 @@ def compare_input_vs_reconstruction(
     fig, axes = plt.subplots(num_samples, 4, figsize=(16, 4 * num_samples))
     if num_samples == 1:
         axes = axes.reshape(1, -1)
-    fig.suptitle('ResNet50 SAE: Input vs Reconstruction Comparison', fontsize=14, fontweight='bold')
+    fig.suptitle('ResNet50 SAE: Input vs Reconstruction Comparison (Two-Level Sparsity)', fontsize=14, fontweight='bold')
 
     for i in range(num_samples):
         input_act = samples[i]  # [1024, 14, 14]
