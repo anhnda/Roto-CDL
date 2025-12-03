@@ -728,14 +728,14 @@ if __name__ == "__main__":
     TOP_K = 15            # Number of active features per spatial position
 
     # Loss weights
-    LAMBDA_L1 = 5          # L1 sparsity penalty
-    LAMBDA_LAT = 0.05        # Lateral inhibition penalty
-    LAMBDA_COMPACT = 0.05   # Spatial compactness penalty
+    LAMBDA_L1 = 3          # L1 sparsity penalty
+    LAMBDA_LAT = 0.01        # Lateral inhibition penalty
+    LAMBDA_COMPACT = 0.01   # Spatial compactness penalty
     LAMBDA_CHANNEL_SPARSITY = 0.0  # Feature-channel sparsity penalty
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
-    EPOCHS = 20
+    EPOCHS = 15
 
     print(f"\nTraining Configuration:")
     print(f"  Backbone: ResNet50 (pretrained ImageNet)")
