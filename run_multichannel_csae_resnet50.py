@@ -724,15 +724,15 @@ if __name__ == "__main__":
     INPUT_CHANNELS = 1024   # All ResNet50 layer3 channels
     HIDDEN_DIM = 8192       # Sparse feature dimension (8× expansion)
     KERNEL_SIZE = 1         # 1×1 conv for channel-wise features
-    TOP_K = 64              # Number of active features per spatial position
+    TOP_K = 32             # Number of active features per spatial position
 
     # Loss weights
-    LAMBDA_L1 = 0.5          # L1 sparsity penalty
-    LAMBDA_LAT = 0.0        # Lateral inhibition penalty
-    LAMBDA_COMPACT = 0.0    # Spatial compactness penalty
-    LAMBDA_CHANNEL_SPARSITY = 0.05  # Feature-channel sparsity penalty
+    LAMBDA_L1 = 1          # L1 sparsity penalty
+    LAMBDA_LAT = 0.05        # Lateral inhibition penalty
+    LAMBDA_COMPACT = 0.05   # Spatial compactness penalty
+    LAMBDA_CHANNEL_SPARSITY = 0.1  # Feature-channel sparsity penalty
 
-    LR = 3e-4
+    LR = 1e-3
     WEIGHT_DECAY = 1e-5
     EPOCHS = 20
 
