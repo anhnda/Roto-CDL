@@ -1,5 +1,5 @@
 """
-Multi-Channel ConvSAE Training Script with ResNet50 Backbone
+Multi-Channel ConvSAE Training Script with ResNet50 Backbone (Two-Level Sparsity)
 
 Uses pretrained ResNet50 (ImageNet) to extract ALL 1024 activation channels from layer3.
 Applies a single Convolutional Sparse Autoencoder with 1×1 convolutions to learn
@@ -8,12 +8,16 @@ sparse features across the channel dimension.
 Key Design:
 - Input: All 1024 channels from ResNet50 layer3 (14×14 spatial resolution)
 - Architecture: 1024 channels → 8192+ sparse features (1×1 conv)
+- Two-Level Sparsity:
+  1. Channel-level: Top-K selection based on sum of spatial activations (H×W)
+  2. Spatial-level: L1 regularization within selected channels for spatial sparsity
 - Goal: Each feature activates for specific combinations of input channels
 - Inspired by SAE (Sparse Autoencoder) for LLM interpretability
 
 This approach treats the 1024 ResNet channels as a "vocabulary" and learns
-interpretable sparse features that combine these channels, similar to how
-SAE learns interpretable features from transformer activations.
+interpretable sparse features that combine these channels. The two-level sparsity
+ensures that (1) only the most important channels activate per sample, and
+(2) within those channels, activations are spatially sparse.
 
 Usage:
     python run_multichannel_csae_resnet50.py
@@ -43,25 +47,33 @@ torch.cuda.init()
 
 class MultiChannelConvSAE(nn.Module):
     """
-    Convolutional Sparse Autoencoder for multi-channel input with Top-K activation.
+    Convolutional Sparse Autoencoder for multi-channel input with Two-Level Sparsity.
 
     Uses 1×1 convolutions to learn sparse features across the channel dimension.
     Each learned feature corresponds to a specific combination of input channels.
 
+    Two-Level Sparsity Mechanism:
+        1. Channel-level sparsity (Top-K): For each sample, rank channels by their total
+           spatial activation (sum over H×W), then select only top-k channels (hard selection)
+        2. Spatial-level sparsity (L1): Among the selected top-k channels, apply L1
+           regularization to make each channel's spatial activations sparse
+
     Key Features:
-        - Top-K activation: Only the top-k features activate per spatial position (hard sparsity)
-        - Spatial compactness: Encourages localized feature activations
+        - Top-K channel selection: Only the top-k channels activate per sample (hard channel sparsity)
+        - L1 spatial regularization: Encourages sparse spatial activations within selected channels
+        - Spatial compactness: Optional TV loss for localized feature activations
 
     Architecture:
         - Encoder: Conv2d(in_channels → hidden_dim, kernel_size=1×1)
-        - Top-K Activation: z = TopK(ReLU(W_enc * x + b), k)
+        - Channel Selection: z_channels = TopK_channels(ReLU(W_enc * x + b), k)
+        - Spatial Sparsity: Applied via L1 regularization during training
         - Decoder: Conv2d(hidden_dim → in_channels, kernel_size=1×1)
 
     Args:
         in_channels: Number of input channels (e.g., 1024 for ResNet50 layer3)
         hidden_dim: Number of sparse features (e.g., 8192)
         kernel_size: Convolution kernel size (default: 1 for channel-wise features)
-        top_k: Number of features to keep active per spatial position (default: 64)
+        top_k: Number of channels to keep active per sample (default: 64)
     """
 
     def __init__(self, in_channels: int = 1024, hidden_dim: int = 8192,
@@ -101,34 +113,55 @@ class MultiChannelConvSAE(nn.Module):
 
     def topk_activation(self, x: torch.Tensor, threshold: float = 0.0) -> torch.Tensor:
         """
-        Apply Top-K activation (hard sparsity).
+        Apply Top-K channel selection based on spatial activation sum (hard channel sparsity).
+
+        Two-level sparsity mechanism:
+        1. Channel-level: Select top-k channels based on sum of spatial activations (H×W)
+        2. Spatial-level: Keep original spatial pattern for selected channels
+                         (L1 regularization in training loop enforces spatial sparsity)
 
         Args:
             x: [B, C, H, W] - Feature activations after ReLU
             threshold: Minimum activation value to keep (default: 0.0, disabled)
 
         Returns:
-            x_topk: [B, C, H, W] - Sparse features with only top-k active
+            x_topk: [B, C, H, W] - Sparse features with only top-k channels active
         """
         B, C, H, W = x.shape
 
-        # Reshape to [B, C, H*W] for easier top-k selection
-        x_flat = x.view(B, C, H * W)  # [B, C, H*W]
+        # 1. CHANNEL-LEVEL SPARSITY: Rank channels by total spatial activation
+        # Sum over spatial dimensions (H×W) for each channel
+        channel_importance = x.sum(dim=[2, 3])  # [B, C] - sum over H×W
 
-        # Get top-k values and indices per spatial position
-        # We want top-k across the channel dimension (dim=1) for each spatial position
-        topk_vals, topk_indices = torch.topk(x_flat, k=self.top_k, dim=1)  # [B, k, H*W]
+        # Select top-k channels based on importance (per sample)
+        topk_vals, topk_indices = torch.topk(channel_importance, k=self.top_k, dim=1)  # [B, k]
 
-        # Apply threshold only if > 0 (optional, typically disabled)
+        # Apply threshold to importance scores if needed (optional)
         if threshold > 0:
-            topk_vals = topk_vals * (topk_vals > threshold).float()
+            # Create mask for channels above threshold
+            threshold_mask = topk_vals > threshold  # [B, k]
+        else:
+            threshold_mask = None
 
-        # Create sparse tensor with only top-k values above threshold
-        result = torch.zeros_like(x_flat)
-        result.scatter_(1, topk_indices, topk_vals)
+        # Create channel selection mask [B, C]
+        channel_mask = torch.zeros(B, C, device=x.device, dtype=torch.bool)
+        channel_mask.scatter_(1, topk_indices, True)  # Mark top-k channels as True
 
-        # Reshape back to [B, C, H, W]
-        result = result.view(B, C, H, W)
+        # Apply threshold mask if specified
+        if threshold_mask is not None:
+            # Zero out channels that didn't meet threshold
+            for b in range(B):
+                valid_channels = topk_indices[b][threshold_mask[b]]
+                temp_mask = torch.zeros(C, device=x.device, dtype=torch.bool)
+                temp_mask[valid_channels] = True
+                channel_mask[b] = temp_mask
+
+        # 2. SPATIAL-LEVEL: Keep original spatial activations for selected channels
+        # Expand mask to [B, C, H, W] for broadcasting
+        channel_mask_4d = channel_mask.unsqueeze(2).unsqueeze(3)  # [B, C, 1, 1]
+
+        # Zero out non-selected channels (keep full spatial pattern for selected channels)
+        result = x * channel_mask_4d.float()  # [B, C, H, W]
 
         return result
 
@@ -485,7 +518,7 @@ class ResNet50ActivationExtractor:
 def plot_training_logs(logs: Dict[str, List], save_path: str = 'multichannel_csae_logs.png'):
     """Plot training metrics."""
     fig, axs = plt.subplots(3, 3, figsize=(18, 12))
-    fig.suptitle('Multi-Channel ConvSAE Training (ResNet50 - 1024 Channels + Top-K)',
+    fig.suptitle('Multi-Channel ConvSAE Training (ResNet50 - Two-Level Sparsity)',
                  fontsize=14, fontweight='bold')
 
     # Row 1: Main losses
@@ -525,9 +558,9 @@ def plot_training_logs(logs: Dict[str, List], save_path: str = 'multichannel_csa
     axs[1, 1].set_xlabel("Batch")
     axs[1, 1].grid(True, alpha=0.3)
 
-    # Active neurons percentage
+    # Active neurons percentage (channel-level sparsity)
     axs[1, 2].plot(logs["active_pct"], color='teal', linewidth=1.5)
-    axs[1, 2].set_title("Active Neurons % (Top-K enforced)")
+    axs[1, 2].set_title("Active Channels % (Top-K Channel Selection)")
     axs[1, 2].set_ylabel("Percent (%)")
     axs[1, 2].set_xlabel("Batch")
     axs[1, 2].set_ylim(0, 10)
@@ -752,12 +785,16 @@ if __name__ == "__main__":
     print("\n" + "="*80)
     print("Starting Training...")
     print("="*80)
-    print("\nExpected Behavior:")
+    print("\nExpected Behavior (Two-Level Sparsity):")
     print(f"  • Reconstruction Loss: Decrease to <0.02")
-    print(f"  • Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.2f}% (Top-K={TOP_K}, hard sparsity)")
-    print(f"  • Spatial Compactness: Decrease (sparser spatial patterns)")
+    print(f"  • Channel Sparsity (Level 1): Only top-{TOP_K} channels active per sample")
+    print(f"    - Active Neurons: ~{TOP_K/HIDDEN_DIM*100:.2f}% (hard channel selection)")
+    print(f"    - Ranking: Based on sum of spatial activations (H×W)")
+    print(f"  • Spatial Sparsity (Level 2): L1 regularization within selected channels")
+    print(f"    - L1 Loss: Should stabilize (encourages sparse spatial patterns)")
+    print(f"    - Spatial Compactness: Decrease (more localized activations)")
     print(f"  • Channel Sparsity: Each feature uses ~50-150 input channels")
-    print(f"  • Feature Maps: Very sparse (most values = 0, only top-{TOP_K} activate per position)")
+    print(f"  • Feature Maps: Sparse at both levels (few channels × sparse spatial patterns)")
     print(f"  • GradCAM: ~150-400 channels selected per image (80% cumulative score)")
     print("="*80 + "\n")
 
@@ -824,16 +861,16 @@ if __name__ == "__main__":
         print(f"\n[Epoch {epoch+1}/{EPOCHS}] Summary:")
         print(f"  Total Loss: {avg_metrics['total_loss']:.4f}")
         print(f"  Reconstruction: {avg_metrics['recon_loss']:.4f}")
-        print(f"  L1 Sparsity: {avg_metrics['l1_loss']:.4f}")
+        print(f"  L1 Sparsity (Spatial): {avg_metrics['l1_loss']:.4f}")
         print(f"  Lateral Inhibition: {avg_metrics['lateral_loss']:.4f}")
         print(f"  Spatial Compactness: {avg_metrics['compact_loss']:.4f}")
-        print(f"  Channel Sparsity: {avg_metrics['channel_sparsity_loss']:.4f}")
-        print(f"  Active Neurons: {avg_metrics['active_pct']:.2f}% (Target: {TOP_K/HIDDEN_DIM*100:.1f}%)")
+        print(f"  Channel Sparsity (Encoder): {avg_metrics['channel_sparsity_loss']:.4f}")
+        print(f"  Active Channels: {avg_metrics['active_pct']:.2f}% (Target: {TOP_K/HIDDEN_DIM*100:.1f}%)")
 
         # Check sparsity target (with top-k, should be close to TOP_K/HIDDEN_DIM)
         expected_pct = TOP_K / HIDDEN_DIM * 100
         if abs(avg_metrics['active_pct'] - expected_pct) > 1.0:
-            print(f"  ℹ Info: Active neurons {avg_metrics['active_pct']:.2f}% vs expected {expected_pct:.2f}%")
+            print(f"  ℹ Info: Active channels {avg_metrics['active_pct']:.2f}% vs expected {expected_pct:.2f}%")
 
         print("-" * 80)
 
