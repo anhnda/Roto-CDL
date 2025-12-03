@@ -24,6 +24,8 @@ Usage:
 """
 
 import torch
+torch.cuda.init()
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -40,7 +42,6 @@ sys.path.append('.')
 from src.gradcam import GradCAM
 from visualized_resnet50 import visualize_multichannel_sae_r50
 
-torch.cuda.init()
 # ==========================================
 # Multi-Channel ConvSAE Architecture
 # ==========================================
@@ -730,7 +731,7 @@ if __name__ == "__main__":
     LAMBDA_L1 = 1          # L1 sparsity penalty
     LAMBDA_LAT = 0.05        # Lateral inhibition penalty
     LAMBDA_COMPACT = 0.05   # Spatial compactness penalty
-    LAMBDA_CHANNEL_SPARSITY = 0.1  # Feature-channel sparsity penalty
+    LAMBDA_CHANNEL_SPARSITY = 0.0  # Feature-channel sparsity penalty
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
