@@ -283,6 +283,7 @@ def evaluate_accuracy_drop(
         mse_list.append(stats['mse'])
         relative_error_list.append(stats['relative_error'])
         sparsity_list.append(stats['sparsity'])
+        ic += 1
         if ic == 10:
             break
 
