@@ -245,11 +245,12 @@ def evaluate_accuracy_drop(
 
     print("\nEvaluating accuracy with original vs reconstructed activations...")
     print("="*80)
-
+    ic = 0
     for images, labels in tqdm(data_loader, desc="Processing batches"):
         images = images.to(device)
         labels = labels.to(device)
         batch_size = images.size(0)
+        
 
         # Convert Imagenette labels to ImageNet labels if mapping exists
         if local_to_imagenet is not None:
@@ -282,6 +283,8 @@ def evaluate_accuracy_drop(
         mse_list.append(stats['mse'])
         relative_error_list.append(stats['relative_error'])
         sparsity_list.append(stats['sparsity'])
+        if ic == 10:
+            break
 
     # Compute accuracies
     acc_original = correct_original / total_samples * 100
