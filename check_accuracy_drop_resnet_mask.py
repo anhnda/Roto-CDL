@@ -89,7 +89,7 @@ class ResNet18WithCSAEReconstruction:
         """Forward hook to save activations."""
         self.activations = output
 
-    def _normalize_activations(self, acts: torch.Tensor) -> torch.Tensor:
+    def _normalize_activations(self, acts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Normalize activations using per-channel 99th percentile.
         Same normalization as used during CSAE training.
@@ -99,11 +99,14 @@ class ResNet18WithCSAEReconstruction:
 
         Returns:
             normalized: [B, C, H, W] - Normalized activations
+            scale_factors: [B, C] - Scale factors used for normalization (for denormalization)
         """
+        B, C, H, W = acts.shape
         normalized = acts.clone()
+        scale_factors = torch.ones(B, C, device=acts.device)
 
-        for b in range(acts.shape[0]):
-            for c in range(acts.shape[1]):
+        for b in range(B):
+            for c in range(C):
                 channel_data = acts[b, c, :, :]
 
                 # Skip channels that are all zeros
@@ -118,8 +121,9 @@ class ResNet18WithCSAEReconstruction:
                     if scale_factor > 1e-8:
                         channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
                         normalized[b, c, :, :] = channel_data / (scale_factor + 1e-8)
+                        scale_factors[b, c] = scale_factor
 
-        return normalized
+        return normalized, scale_factors
 
     def forward_original(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -159,15 +163,15 @@ class ResNet18WithCSAEReconstruction:
             original_acts = x.clone()  # [B, C, H, W]
 
             # Normalize activations (same as training)
-            normalized_acts = self._normalize_activations(original_acts)
+            normalized_acts, scale_factors = self._normalize_activations(original_acts)
 
             # Pass through CSAE to get reconstruction
             reconstruction, sparse_features = self.csae(normalized_acts, use_topk=True)
 
-            # Denormalize reconstruction (reverse of normalization)
-            # Note: This is approximate since we normalized per-sample during forward
-            # For simplicity, we'll use the reconstruction directly
-            reconstructed_acts = reconstruction
+            # Denormalize reconstruction using the scale factors
+            # reconstruction is in [0, 1] range, multiply by scale factors to get back to original scale
+            scale_factors_4d = scale_factors.unsqueeze(2).unsqueeze(3)  # [B, C, 1, 1]
+            reconstructed_acts = reconstruction * scale_factors_4d
 
             # Replace original with reconstructed activations
             x = reconstructed_acts
@@ -178,7 +182,7 @@ class ResNet18WithCSAEReconstruction:
             x = torch.flatten(x, 1)
             logits = self.resnet.fc(x)
 
-            # Compute reconstruction statistics
+            # Compute reconstruction statistics (comparing denormalized reconstruction to original)
             mse = F.mse_loss(reconstructed_acts, original_acts).item()
             relative_error = (reconstructed_acts - original_acts).abs().mean() / (original_acts.abs().mean() + 1e-8)
             relative_error = relative_error.item()
