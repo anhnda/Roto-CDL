@@ -38,6 +38,8 @@ import numpy as np
 from typing import Dict, List, Tuple
 from tqdm import tqdm
 import sys
+import os
+import hashlib
 sys.path.append('.')
 from src.gradcam import GradCAM
 from visualized_resnet50 import visualize_multichannel_sae_r50
@@ -416,10 +418,32 @@ class ResNet50ActivationExtractor:
 
         return channel_mask, num_selected
 
+    def _get_cache_filename(self, data_loader: DataLoader, normalize: bool) -> str:
+        """
+        Generate a unique cache filename based on dataset and configuration.
+
+        Args:
+            data_loader: DataLoader with (image, label) pairs
+            normalize: Whether normalization is applied
+
+        Returns:
+            cache_filename: Path to cache file
+        """
+        # Create a hash of the configuration
+        config_str = f"resnet50_layer3_threshold{self.cumulative_threshold}_normalize{normalize}_nsamples{len(data_loader.dataset)}"
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+        cache_dir = "cache_activations"
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cache_filename = os.path.join(cache_dir, f"resnet50_activations_{config_hash}.pt")
+        return cache_filename
+
     def collect_activation_maps(
         self,
         data_loader: DataLoader,
-        normalize: bool = True
+        normalize: bool = True,
+        use_cache: bool = True
     ) -> torch.Tensor:
         """
         Collect activation maps with GradCAM-based channel selection.
@@ -432,10 +456,26 @@ class ResNet50ActivationExtractor:
         Args:
             data_loader: DataLoader with (image, label) pairs
             normalize: Apply robust normalization (99th percentile)
+            use_cache: Whether to use cached activations if available (default: True)
 
         Returns:
             X: [N, 1024, 14, 14] - Activation maps with selective zero-masking
         """
+        # Check for cached activations
+        if use_cache:
+            cache_filename = self._get_cache_filename(data_loader, normalize)
+            if os.path.exists(cache_filename):
+                print(f"\n{'='*80}")
+                print(f"Loading cached activations from: {cache_filename}")
+                print(f"{'='*80}")
+                X = torch.load(cache_filename)
+                print(f"\nLoaded {X.shape[0]} activation maps from cache:")
+                print(f"  Shape: {X.shape}")
+                print(f"  Range: [{X.min():.4f}, {X.max():.4f}]")
+                print(f"  Mean: {X.mean():.4f}, Std: {X.std():.4f}")
+                return X
+            else:
+                print(f"\nCache file not found. Will save to: {cache_filename}")
         all_activations = []
         channel_selection_stats = []
 
@@ -508,6 +548,13 @@ class ResNet50ActivationExtractor:
 
             print(f"  Normalized range: [{X.min():.4f}, {X.max():.4f}]")
             print(f"  Mean: {X.mean():.4f}, Std: {X.std():.4f}")
+
+        # Save to cache
+        if use_cache:
+            cache_filename = self._get_cache_filename(data_loader, normalize)
+            print(f"\nSaving activations to cache: {cache_filename}")
+            torch.save(X, cache_filename)
+            print(f"✓ Activations cached successfully!")
 
         return X
 
@@ -702,11 +749,13 @@ if __name__ == "__main__":
     # Create activation extractor
     extractor = ResNet50ActivationExtractor(device=device)
 
-    # Collect activation maps (ALL 1024 channels)
+    # Collect activation maps (ALL 1024 channels, with caching for faster repeated runs)
     print("\nExtracting ALL 1024 channels from ResNet50 layer3...")
+    print("(Caching enabled - subsequent runs will be much faster)")
     X = extractor.collect_activation_maps(
         data_loader,
-        normalize=True
+        normalize=True,
+        use_cache=True  # Enable caching (default)
     )
 
     print(f"\nCollected activation maps:")
