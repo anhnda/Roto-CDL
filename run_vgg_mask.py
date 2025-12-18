@@ -832,14 +832,21 @@ if __name__ == "__main__":
     INPUT_CHANNELS = extractor.num_channels  # Channels from VGG16 features[16]
     HIDDEN_DIM = INPUT_CHANNELS * 8  # 8× expansion for sparse features
     KERNEL_SIZE = 1         # 1×1 conv for channel-wise features
-    TOP_K = int(HIDDEN_DIM * 0.015)  # ~1.5% sparsity (adaptive based on hidden_dim)
+    # TOP_K = int(HIDDEN_DIM * 0.015)  # ~1.5% sparsity (adaptive based on hidden_dim)
 
-    # Loss weights
-    LAMBDA_L1 = 3.0         # L1 sparsity penalty
-    LAMBDA_LAT = 0.01       # Lateral inhibition penalty
-    LAMBDA_COMPACT = 0.01   # Spatial compactness penalty
-    LAMBDA_CHANNEL_SPARSITY = 0.0  # Feature-channel sparsity penalty
-
+    # # Loss weights
+    # LAMBDA_L1 = 3.0         # L1 sparsity penalty
+    # LAMBDA_LAT = 0.01       # Lateral inhibition penalty
+    # LAMBDA_COMPACT = 0.01   # Spatial compactness penalty
+    # LAMBDA_CHANNEL_SPARSITY = 0.0  # Feature-channel sparsity penalty
+    #KEY CHANGES - Much less aggressive sparsity               
+    TOP_K = int(HIDDEN_DIM * 0.15)  # 15% instead of 1.5% → ~300 features instead of 30                                     
+                                                              
+    #Loss weights - Much lower L1 penalty                      
+    LAMBDA_L1 = 0.3  # Instead of 3.0 - reduce by 10x           
+    LAMBDA_LAT = 0.01                                           
+    LAMBDA_COMPACT = 0.01                                       
+    LAMBDA_CHANNEL_SPARSITY = 0.0   
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
     EPOCHS = 15
