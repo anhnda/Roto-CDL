@@ -353,7 +353,7 @@ class VGG16ActivationExtractor:
     - VGG16 features[16]: 256 channels, 28×28 spatial resolution
     """
 
-    def __init__(self, device='cuda', cumulative_threshold=0.85):
+    def __init__(self, device='cuda', cumulative_threshold=0.95):
         self.device = device
         self.cumulative_threshold = cumulative_threshold
 
