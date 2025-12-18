@@ -43,7 +43,7 @@ import os
 import hashlib
 sys.path.append('.')
 from src.gradcam import GradCAM
-from visualize_vgg import visualize_multichannel_sae_vgg
+from visualize_multichannel_sae_vgg import visualize_multichannel_sae_vgg
 
 # ==========================================
 # Multi-Channel ConvSAE Architecture
