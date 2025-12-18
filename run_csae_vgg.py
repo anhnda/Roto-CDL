@@ -43,7 +43,6 @@ import os
 import hashlib
 sys.path.append('.')
 from src.gradcam import GradCAM
-from visualize_multichannel_sae_vgg import visualize_multichannel_sae_vgg
 
 # ==========================================
 # Multi-Channel ConvSAE Architecture
@@ -1000,6 +999,7 @@ if __name__ == "__main__":
 
     # Generate comprehensive VGG SAE visualization
     print("\nGenerating VGG16 Multi-Channel SAE visualization...")
+    from visualize_multichannel_sae_vgg import visualize_multichannel_sae_vgg
     visualize_multichannel_sae_vgg(
         model=csae_model,
         sample_activations=X,
