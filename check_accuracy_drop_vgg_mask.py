@@ -43,6 +43,21 @@ sys.path.append('.')
 from run_vgg_mask import MultiChannelConvSAE
 
 
+# Imagenette class names to ImageNet class indices mapping
+IMAGENETTE_TO_IMAGENET = {
+    'tench': 0,
+    'English_springer': 217,
+    'cassette_player': 482,
+    'chain_saw': 491,
+    'church': 497,
+    'French_horn': 566,
+    'garbage_truck': 569,
+    'gas_pump': 571,
+    'golf_ball': 574,
+    'parachute': 701
+}
+
+
 class VGG16WithCSAEReconstruction:
     """
     VGG16 model with CSAE reconstruction at features[16].
@@ -181,7 +196,8 @@ class VGG16WithCSAEReconstruction:
 def evaluate_accuracy_drop(
     model: VGG16WithCSAEReconstruction,
     data_loader: DataLoader,
-    device: str = 'cuda'
+    device: str = 'cuda',
+    imagenette_to_imagenet: Dict[str, int] = None
 ) -> Dict:
     """
     Evaluate classification accuracy with original vs reconstructed activations.
@@ -190,10 +206,27 @@ def evaluate_accuracy_drop(
         model: VGG16WithCSAEReconstruction model
         data_loader: DataLoader with (image, label) pairs
         device: Device to run on
+        imagenette_to_imagenet: Mapping from Imagenette class names to ImageNet indices
 
     Returns:
         results: Dictionary with accuracy metrics
     """
+    # Create label mapping (Imagenette local index -> ImageNet index)
+    if imagenette_to_imagenet is not None:
+        # Get class names from dataset
+        if hasattr(data_loader.dataset, 'dataset'):
+            class_names = data_loader.dataset.dataset.classes
+        else:
+            class_names = data_loader.dataset.classes
+
+        # Create mapping: local_idx -> imagenet_idx
+        local_to_imagenet = torch.tensor([imagenette_to_imagenet[name] for name in class_names])
+        print(f"\nUsing ImageNet label mapping:")
+        for i, name in enumerate(class_names):
+            print(f"  Imagenette[{i}] '{name}' -> ImageNet[{local_to_imagenet[i]}]")
+    else:
+        local_to_imagenet = None
+
     # Metrics
     total_samples = 0
     correct_original = 0
@@ -214,6 +247,12 @@ def evaluate_accuracy_drop(
         labels = labels.to(device)
         batch_size = images.size(0)
 
+        # Convert Imagenette labels to ImageNet labels if mapping exists
+        if local_to_imagenet is not None:
+            imagenet_labels = local_to_imagenet[labels.cpu()].to(device)
+        else:
+            imagenet_labels = labels
+
         # Forward with original activations
         logits_original = model.forward_original(images)
         pred_original = logits_original.argmax(dim=1)
@@ -222,16 +261,16 @@ def evaluate_accuracy_drop(
         logits_reconstructed, stats = model.forward_with_reconstruction(images)
         pred_reconstructed = logits_reconstructed.argmax(dim=1)
 
-        # Top-1 accuracy
-        correct_original += (pred_original == labels).sum().item()
-        correct_reconstructed += (pred_reconstructed == labels).sum().item()
+        # Top-1 accuracy (compare with ImageNet labels)
+        correct_original += (pred_original == imagenet_labels).sum().item()
+        correct_reconstructed += (pred_reconstructed == imagenet_labels).sum().item()
 
         # Top-5 accuracy
         _, top5_original = logits_original.topk(5, dim=1)
         _, top5_reconstructed = logits_reconstructed.topk(5, dim=1)
 
-        top5_correct_original += sum([labels[i] in top5_original[i] for i in range(batch_size)])
-        top5_correct_reconstructed += sum([labels[i] in top5_reconstructed[i] for i in range(batch_size)])
+        top5_correct_original += sum([imagenet_labels[i] in top5_original[i] for i in range(batch_size)])
+        top5_correct_reconstructed += sum([imagenet_labels[i] in top5_reconstructed[i] for i in range(batch_size)])
 
         total_samples += batch_size
 
@@ -288,13 +327,19 @@ def print_results(results: Dict):
     print(f"  Original (no reconstruction):     {results['acc_original']:.2f}%")
     print(f"  Reconstructed (CSAE):             {results['acc_reconstructed']:.2f}%")
     print(f"  Accuracy Drop:                    {results['acc_drop']:.2f}%")
-    print(f"  Relative Drop:                    {results['acc_drop']/results['acc_original']*100:.2f}%")
+    if results['acc_original'] > 0:
+        print(f"  Relative Drop:                    {results['acc_drop']/results['acc_original']*100:.2f}%")
+    else:
+        print(f"  Relative Drop:                    N/A (original accuracy is 0%)")
 
     print(f"\nTop-5 Accuracy:")
     print(f"  Original (no reconstruction):     {results['top5_acc_original']:.2f}%")
     print(f"  Reconstructed (CSAE):             {results['top5_acc_reconstructed']:.2f}%")
     print(f"  Accuracy Drop:                    {results['top5_acc_drop']:.2f}%")
-    print(f"  Relative Drop:                    {results['top5_acc_drop']/results['top5_acc_original']*100:.2f}%")
+    if results['top5_acc_original'] > 0:
+        print(f"  Relative Drop:                    {results['top5_acc_drop']/results['top5_acc_original']*100:.2f}%")
+    else:
+        print(f"  Relative Drop:                    N/A (original top-5 accuracy is 0%)")
 
     print(f"\nReconstruction Quality:")
     print(f"  Average MSE:                      {results['avg_mse']:.6f}")
@@ -385,8 +430,9 @@ def main():
     print(f"  Batch size: {args.batch_size}")
     print(f"  Classes: {len(dataset.dataset.classes) if hasattr(dataset, 'dataset') else len(dataset.classes)}")
 
-    # Evaluate accuracy drop
-    results = evaluate_accuracy_drop(model, data_loader, device=device)
+    # Evaluate accuracy drop (with ImageNet label mapping for Imagenette)
+    results = evaluate_accuracy_drop(model, data_loader, device=device,
+                                     imagenette_to_imagenet=IMAGENETTE_TO_IMAGENET)
 
     # Print results
     print_results(results)
@@ -408,13 +454,19 @@ def main():
         f.write(f"  Original:        {results['acc_original']:.2f}%\n")
         f.write(f"  Reconstructed:   {results['acc_reconstructed']:.2f}%\n")
         f.write(f"  Drop:            {results['acc_drop']:.2f}%\n")
-        f.write(f"  Relative Drop:   {results['acc_drop']/results['acc_original']*100:.2f}%\n\n")
+        if results['acc_original'] > 0:
+            f.write(f"  Relative Drop:   {results['acc_drop']/results['acc_original']*100:.2f}%\n\n")
+        else:
+            f.write(f"  Relative Drop:   N/A (original accuracy is 0%)\n\n")
 
         f.write(f"Top-5 Accuracy:\n")
         f.write(f"  Original:        {results['top5_acc_original']:.2f}%\n")
         f.write(f"  Reconstructed:   {results['top5_acc_reconstructed']:.2f}%\n")
         f.write(f"  Drop:            {results['top5_acc_drop']:.2f}%\n")
-        f.write(f"  Relative Drop:   {results['top5_acc_drop']/results['top5_acc_original']*100:.2f}%\n\n")
+        if results['top5_acc_original'] > 0:
+            f.write(f"  Relative Drop:   {results['top5_acc_drop']/results['top5_acc_original']*100:.2f}%\n\n")
+        else:
+            f.write(f"  Relative Drop:   N/A (original top-5 accuracy is 0%)\n\n")
 
         f.write(f"Reconstruction Quality:\n")
         f.write(f"  Average MSE:             {results['avg_mse']:.6f}\n")
