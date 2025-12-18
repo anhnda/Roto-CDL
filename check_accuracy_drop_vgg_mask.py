@@ -162,7 +162,7 @@ class VGG16WithCSAEReconstruction:
             normalized_acts, scale_factors = self._normalize_activations(original_acts)
 
             # Pass through CSAE to get reconstruction
-            reconstruction, sparse_features = self.csae(normalized_acts, use_topk=True)
+            reconstruction, sparse_features = self.csae(normalized_acts, use_topk=False)
 
             # Denormalize reconstruction using the scale factors
             # reconstruction is in [0, 1] range, multiply by scale factors to get back to original scale
