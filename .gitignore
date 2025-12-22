@@ -209,5 +209,6 @@ __marimo__/
 
 data/
 weights/
-.claude
-.vscode
+.claude/
+.vscode/
+cache_activations/
