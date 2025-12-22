@@ -67,7 +67,7 @@ from tqdm import tqdm
 
 # Import our model class
 sys.path.append('.')
-from run_resnet_mask_full import MultiChannelConvSAE
+from run_xcsae_full import MultiChannelConvSAE
 from src.gradcam import GradCAM
 from full_classes import IMAGENET2012_CLASSES
 
