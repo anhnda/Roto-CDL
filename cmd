@@ -107,10 +107,7 @@ python visualize_testmf_full.py \
 python visualize_testmf_full.py --num_samples 10 --top_k_features 16
 
 # ResNet18 - Random mode
-python visualize_testmf_full.py \
-  --model resnet18 \
-  --num_samples 10 \
-  --top_k_features 12
+python visualize_testmf_full.py --model resnet18 --num_samples 10 --top_k_features 12
 
 # VGG16 - Random mode
 python visualize_testmf_full.py \
