@@ -399,9 +399,9 @@ class MultiModelActivationExtractor:
         # Get dimensions
         with torch.no_grad():
             dummy_input = torch.randn(1, 3, 224, 224).to(device)
-            _ = self._forward_to_target_layer(dummy_input)
-            self.num_channels = self.activations.shape[1]
-            self.spatial_size = self.activations.shape[2]
+            dummy_output = self._forward_to_target_layer(dummy_input)
+            self.num_channels = dummy_output.shape[1]
+            self.spatial_size = dummy_output.shape[2]
 
         print(f"  Output channels: {self.num_channels}")
         print(f"  Spatial resolution: {self.spatial_size}×{self.spatial_size}")
@@ -433,22 +433,34 @@ class MultiModelActivationExtractor:
             x = self.model.relu(x)
             x = self.model.maxpool(x)
             x = self.model.layer1(x)
+
+            if 'layer1' in self.target_layer_name:
+                return x
+
             x = self.model.layer2(x)
+            if 'layer2' in self.target_layer_name:
+                return x
+
+            x = self.model.layer3(x)
             if 'layer3' in self.target_layer_name:
-                x = self.model.layer3(x)
-            if 'layer4' in self.target_layer_name:
-                x = self.model.layer3(x)
-                x = self.model.layer4(x)
+                return x
+
+            x = self.model.layer4(x)
+            return x
+
         elif self.model_name == 'vgg16':
             # Parse features[X]
             target_idx = int(self.target_layer_name.split('[')[1].rstrip(']'))
             for i in range(target_idx + 1):
                 x = self.model.features[i](x)
+            return x
+
         elif self.model_name == 'efficientnet':
             # Parse features[X]
             target_idx = int(self.target_layer_name.split('[')[1].rstrip(']'))
             for i in range(target_idx + 1):
                 x = self.model.features[i](x)
+            return x
 
         return x
 
