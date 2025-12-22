@@ -99,7 +99,7 @@ ACTIVATION_CHUNK_SIZE = 100
 
 # Training parameters
 BATCH_SIZE_COLLECTION = 32
-BATCH_SIZE_TRAIN = 64
+BATCH_SIZE_TRAIN = 32
 
 # Model configurations
 MODEL_CONFIGS = {
