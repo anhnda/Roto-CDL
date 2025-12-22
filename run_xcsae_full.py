@@ -515,51 +515,84 @@ class MultiModelActivationExtractor:
         """Get the cache file path for a given cache key."""
         return self.cache_dir / f"activations_{cache_key}.pkl"
 
-    def _save_activations_to_cache(self, cache_key: str,
-                                   activation_chunks: List[torch.Tensor],
-                                   mask_chunks: List[torch.Tensor],
-                                   label_chunks: List[torch.Tensor],
-                                   metadata: Dict):
-        """Save extracted activations to cache."""
-        cache_path = self._get_cache_path(cache_key)
+    def _save_chunk_part(self, cache_key: str, part_idx: int,
+                        activation_chunk: torch.Tensor,
+                        mask_chunk: torch.Tensor,
+                        label_chunk: torch.Tensor):
+        """Save a single chunk part to disk (incremental saving)."""
+        cache_dir = self.cache_dir / cache_key
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\nSaving activations to cache...")
-        print(f"  Cache path: {cache_path}")
+        part_path = cache_dir / f"part_{part_idx:04d}.pkl"
 
-        cache_data = {
-            'activation_chunks': activation_chunks,
-            'mask_chunks': mask_chunks,
-            'label_chunks': label_chunks,
-            'metadata': metadata
+        part_data = {
+            'activation': activation_chunk,
+            'mask': mask_chunk,
+            'label': label_chunk
         }
 
-        joblib.dump(cache_data, cache_path, compress=3)
+        joblib.dump(part_data, part_path, compress=3)
 
-        # Calculate cache size
-        cache_size_mb = cache_path.stat().st_size / (1024 * 1024)
-        print(f"  Cache size: {cache_size_mb:.1f} MB")
+    def _save_activations_to_cache(self, cache_key: str, metadata: Dict):
+        """Save metadata for cached activations (chunks already saved incrementally)."""
+        cache_dir = self.cache_dir / cache_key
+        metadata_path = cache_dir / "metadata.pkl"
+
+        print(f"\nSaving cache metadata...")
+        print(f"  Cache directory: {cache_dir}")
+
+        joblib.dump(metadata, metadata_path, compress=3)
+
+        # Calculate total cache size
+        total_size = sum(f.stat().st_size for f in cache_dir.glob("*.pkl"))
+        cache_size_mb = total_size / (1024 * 1024)
+        print(f"  Total cache size: {cache_size_mb:.1f} MB")
+        print(f"  Number of parts: {metadata['num_chunks']}")
         print(f"✓ Activations cached!")
 
     def _load_activations_from_cache(self, cache_key: str) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor], Dict]:
-        """Load cached activations."""
-        cache_path = self._get_cache_path(cache_key)
+        """Load cached activations incrementally from multi-file cache."""
+        cache_dir = self.cache_dir / cache_key
+        metadata_path = cache_dir / "metadata.pkl"
 
         print(f"\n{'='*80}")
         print(f"Loading cached activations...")
         print(f"{'='*80}")
-        print(f"  Cache path: {cache_path}")
+        print(f"  Cache directory: {cache_dir}")
 
-        cache_data = joblib.load(cache_path)
+        # Load metadata
+        metadata = joblib.load(metadata_path)
 
-        activation_chunks = cache_data['activation_chunks']
-        mask_chunks = cache_data['mask_chunks']
-        label_chunks = cache_data['label_chunks']
-        metadata = cache_data['metadata']
+        # Load chunks incrementally
+        activation_chunks = []
+        mask_chunks = []
+        label_chunks = []
+
+        num_parts = metadata['num_chunks']
+        print(f"  Loading {num_parts} chunks incrementally...")
+
+        for part_idx in tqdm(range(num_parts), desc="Loading cache parts"):
+            part_path = cache_dir / f"part_{part_idx:04d}.pkl"
+
+            if not part_path.exists():
+                raise FileNotFoundError(f"Cache part missing: {part_path}")
+
+            part_data = joblib.load(part_path)
+
+            activation_chunks.append(part_data['activation'])
+            mask_chunks.append(part_data['mask'])
+            label_chunks.append(part_data['label'])
+
+            # Clear memory periodically
+            if (part_idx + 1) % 50 == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         total_samples = sum(chunk.shape[0] for chunk in activation_chunks)
-        cache_size_mb = cache_path.stat().st_size / (1024 * 1024)
+        total_size = sum(f.stat().st_size for f in cache_dir.glob("*.pkl"))
+        cache_size_mb = total_size / (1024 * 1024)
 
-        print(f"  Total samples: {total_samples}")
+        print(f"\n  Total samples: {total_samples}")
         print(f"  Number of chunks: {len(activation_chunks)}")
         print(f"  Cache size: {cache_size_mb:.1f} MB")
         print(f"✓ Cached activations loaded!")
@@ -568,8 +601,9 @@ class MultiModelActivationExtractor:
 
     def _check_cache_exists(self, cache_key: str) -> bool:
         """Check if cache exists for the given cache key."""
-        cache_path = self._get_cache_path(cache_key)
-        return cache_path.exists()
+        cache_dir = self.cache_dir / cache_key
+        metadata_path = cache_dir / "metadata.pkl"
+        return metadata_path.exists()
 
     def collect_activation_maps_chunked(
         self,
@@ -617,11 +651,12 @@ class MultiModelActivationExtractor:
         chunk_labels = []
         channel_selection_stats = []
         total_processed = 0
+        chunk_idx = 0
 
         print(f"\nCollecting activation maps (chunked processing)...")
         print(f"  Chunk size: {chunk_size} images")
         print(f"  GradCAM threshold: {self.cumulative_threshold * 100:.0f}%")
-        print(f"  Caching: {'Enabled' if use_cache else 'Disabled'}")
+        print(f"  Caching: {'Enabled (incremental)' if use_cache else 'Disabled'}")
 
         for images, labels in tqdm(data_loader, desc="Extracting activations"):
             for i in range(images.size(0)):
@@ -641,12 +676,33 @@ class MultiModelActivationExtractor:
                 total_processed += 1
 
                 if len(chunk_activations) >= chunk_size:
-                    all_activations.append(torch.cat(chunk_activations, dim=0))
-                    all_masks.append(torch.stack(chunk_masks, dim=0))
-                    all_labels.append(torch.cat(chunk_labels, dim=0))
+                    # Concatenate chunk
+                    act_chunk = torch.cat(chunk_activations, dim=0)
+                    mask_chunk = torch.stack(chunk_masks, dim=0)
+                    label_chunk = torch.cat(chunk_labels, dim=0)
 
-                    #print(f"  Processed {total_processed} images, created chunk {len(all_activations)}...")
+                    # Normalize chunk if needed (before saving to ensure cache has normalized data)
+                    if normalize:
+                        for c in range(act_chunk.shape[1]):
+                            channel_data = act_chunk[:, c, :, :]
+                            flat = channel_data.flatten()
+                            non_zero_flat = flat[flat > 1e-8]
+                            if len(non_zero_flat) > 0:
+                                scale_factor = torch.quantile(non_zero_flat, 0.99)
+                                if scale_factor > 1e-8:
+                                    channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+                                    act_chunk[:, c, :, :] = channel_data / (scale_factor + 1e-8)
 
+                    # Save to cache immediately (incremental saving)
+                    if use_cache:
+                        self._save_chunk_part(cache_key, chunk_idx, act_chunk, mask_chunk, label_chunk)
+
+                    # Add to list for return
+                    all_activations.append(act_chunk)
+                    all_masks.append(mask_chunk)
+                    all_labels.append(label_chunk)
+
+                    chunk_idx += 1
                     chunk_activations = []
                     chunk_masks = []
                     chunk_labels = []
@@ -654,10 +710,31 @@ class MultiModelActivationExtractor:
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
 
+        # Handle last incomplete chunk
         if len(chunk_activations) > 0:
-            all_activations.append(torch.cat(chunk_activations, dim=0))
-            all_masks.append(torch.stack(chunk_masks, dim=0))
-            all_labels.append(torch.cat(chunk_labels, dim=0))
+            act_chunk = torch.cat(chunk_activations, dim=0)
+            mask_chunk = torch.stack(chunk_masks, dim=0)
+            label_chunk = torch.cat(chunk_labels, dim=0)
+
+            # Normalize chunk if needed
+            if normalize:
+                for c in range(act_chunk.shape[1]):
+                    channel_data = act_chunk[:, c, :, :]
+                    flat = channel_data.flatten()
+                    non_zero_flat = flat[flat > 1e-8]
+                    if len(non_zero_flat) > 0:
+                        scale_factor = torch.quantile(non_zero_flat, 0.99)
+                        if scale_factor > 1e-8:
+                            channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+                            act_chunk[:, c, :, :] = channel_data / (scale_factor + 1e-8)
+
+            # Save to cache immediately
+            if use_cache:
+                self._save_chunk_part(cache_key, chunk_idx, act_chunk, mask_chunk, label_chunk)
+
+            all_activations.append(act_chunk)
+            all_masks.append(mask_chunk)
+            all_labels.append(label_chunk)
 
         # Calculate statistics WITHOUT concatenating all data
         total_samples = sum(chunk.shape[0] for chunk in all_activations)
@@ -668,25 +745,10 @@ class MultiModelActivationExtractor:
         print(f"  Total samples: {total_samples}")
         print(f"  Number of chunks: {len(all_activations)}")
         print(f"  Average channels selected: {avg_selected:.1f} ± {std_selected:.1f} (out of {self.num_channels})")
-
-        # Normalize each chunk separately to avoid memory issues
-        if normalize:
-            print("\nApplying robust normalization to chunks...")
-            for X_chunk in all_activations:
-                for c in range(X_chunk.shape[1]):
-                    channel_data = X_chunk[:, c, :, :]
-                    flat = channel_data.flatten()
-                    non_zero_flat = flat[flat > 1e-8]
-                    if len(non_zero_flat) > 0:
-                        scale_factor = torch.quantile(non_zero_flat, 0.99)
-                        if scale_factor > 1e-8:
-                            channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
-                            X_chunk[:, c, :, :] = channel_data / (scale_factor + 1e-8)
-
-            # Sample range from first chunk
+        if normalize and len(all_activations) > 0:
             print(f"  Normalized range (sample from chunk 0): [{all_activations[0].min():.4f}, {all_activations[0].max():.4f}]")
 
-        # Save to cache if enabled
+        # Save metadata to cache if enabled (chunks already saved incrementally)
         if use_cache:
             metadata = {
                 'model_name': self.model_name,
@@ -703,9 +765,6 @@ class MultiModelActivationExtractor:
 
             self._save_activations_to_cache(
                 cache_key=cache_key,
-                activation_chunks=all_activations,
-                mask_chunks=all_masks,
-                label_chunks=all_labels,
                 metadata=metadata
             )
 
