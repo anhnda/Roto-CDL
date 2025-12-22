@@ -536,7 +536,7 @@ class MultiModelActivationExtractor:
                     all_masks.append(torch.stack(chunk_masks, dim=0))
                     all_labels.append(torch.cat(chunk_labels, dim=0))
 
-                    print(f"  Processed {total_processed} images, created chunk {len(all_activations)}...")
+                    #print(f"  Processed {total_processed} images, created chunk {len(all_activations)}...")
 
                     chunk_activations = []
                     chunk_masks = []
