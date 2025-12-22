@@ -44,7 +44,7 @@ torch.cuda.init()
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 import torchvision.models as models
 from torchvision import transforms
 import joblib
@@ -494,12 +494,19 @@ class MultiModelActivationExtractor:
         data_loader: DataLoader,
         normalize: bool = True,
         chunk_size: int = 100
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Collect activation maps in memory-efficient chunks."""
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
+        """Collect activation maps in memory-efficient chunks.
+
+        Returns:
+            Tuple of (activation_chunks, mask_chunks, label_chunks)
+            Each is a list of tensors to avoid memory explosion from concatenation.
+        """
         all_activations = []
         all_masks = []
+        all_labels = []
         chunk_activations = []
         chunk_masks = []
+        chunk_labels = []
         channel_selection_stats = []
         total_processed = 0
 
@@ -510,6 +517,7 @@ class MultiModelActivationExtractor:
         for images, labels in tqdm(data_loader, desc="Extracting activations"):
             for i in range(images.size(0)):
                 image = images[i:i+1].to(self.device)
+                label = labels[i:i+1]
 
                 with torch.no_grad():
                     _ = self.model(image)
@@ -520,16 +528,19 @@ class MultiModelActivationExtractor:
 
                 chunk_activations.append(activations.cpu())
                 chunk_masks.append(channel_mask.cpu())
+                chunk_labels.append(label)
                 total_processed += 1
 
                 if len(chunk_activations) >= chunk_size:
                     all_activations.append(torch.cat(chunk_activations, dim=0))
                     all_masks.append(torch.stack(chunk_masks, dim=0))
+                    all_labels.append(torch.cat(chunk_labels, dim=0))
 
-                    print(f"  Processed {total_processed} images...")
+                    print(f"  Processed {total_processed} images, created chunk {len(all_activations)}...")
 
                     chunk_activations = []
                     chunk_masks = []
+                    chunk_labels = []
 
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
@@ -537,35 +548,36 @@ class MultiModelActivationExtractor:
         if len(chunk_activations) > 0:
             all_activations.append(torch.cat(chunk_activations, dim=0))
             all_masks.append(torch.stack(chunk_masks, dim=0))
+            all_labels.append(torch.cat(chunk_labels, dim=0))
 
-        print(f"\nConcatenating {len(all_activations)} chunks...")
-        X = torch.cat(all_activations, dim=0)
-        masks = torch.cat(all_masks, dim=0)
-
+        # Calculate statistics WITHOUT concatenating all data
+        total_samples = sum(chunk.shape[0] for chunk in all_activations)
         avg_selected = np.mean(channel_selection_stats)
         std_selected = np.std(channel_selection_stats)
-        print(f"\nChannel selection statistics:")
+
+        print(f"\nCollection complete (memory-efficient chunked format):")
+        print(f"  Total samples: {total_samples}")
+        print(f"  Number of chunks: {len(all_activations)}")
         print(f"  Average channels selected: {avg_selected:.1f} ± {std_selected:.1f} (out of {self.num_channels})")
 
-        print(f"\nCollected {X.shape[0]} activation maps:")
-        print(f"  Shape: {X.shape}")
-        print(f"  Range: [{X.min():.4f}, {X.max():.4f}]")
-
+        # Normalize each chunk separately to avoid memory issues
         if normalize:
-            print("\nApplying robust normalization...")
-            for c in range(X.shape[1]):
-                channel_data = X[:, c, :, :]
-                flat = channel_data.flatten()
-                non_zero_flat = flat[flat > 1e-8]
-                if len(non_zero_flat) > 0:
-                    scale_factor = torch.quantile(non_zero_flat, 0.99)
-                    if scale_factor > 1e-8:
-                        channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
-                        X[:, c, :, :] = channel_data / (scale_factor + 1e-8)
+            print("\nApplying robust normalization to chunks...")
+            for X_chunk in all_activations:
+                for c in range(X_chunk.shape[1]):
+                    channel_data = X_chunk[:, c, :, :]
+                    flat = channel_data.flatten()
+                    non_zero_flat = flat[flat > 1e-8]
+                    if len(non_zero_flat) > 0:
+                        scale_factor = torch.quantile(non_zero_flat, 0.99)
+                        if scale_factor > 1e-8:
+                            channel_data = torch.clamp(channel_data, min=0.0, max=scale_factor)
+                            X_chunk[:, c, :, :] = channel_data / (scale_factor + 1e-8)
 
-            print(f"  Normalized range: [{X.min():.4f}, {X.max():.4f}]")
+            # Sample range from first chunk
+            print(f"  Normalized range (sample from chunk 0): [{all_activations[0].min():.4f}, {all_activations[0].max():.4f}]")
 
-        return X, masks
+        return all_activations, all_masks, all_labels
 
 
 # ==========================================
@@ -585,6 +597,114 @@ def masked_reconstruction_loss(reconstruction: torch.Tensor,
     loss = loss_per_sample.mean()
 
     return loss
+
+
+# ==========================================
+# Chunked Dataset (Memory-Efficient)
+# ==========================================
+
+class ChunkedActivationDataset(Dataset):
+    """Memory-efficient dataset that works with chunked activation data.
+
+    Avoids concatenating all chunks into a single tensor to prevent memory explosion.
+    Instead, keeps data in chunks and dynamically retrieves samples.
+    """
+
+    def __init__(self, activation_chunks: List[torch.Tensor],
+                 mask_chunks: List[torch.Tensor],
+                 label_chunks: List[torch.Tensor]):
+        """
+        Args:
+            activation_chunks: List of activation tensors [chunk_size, C, H, W]
+            mask_chunks: List of mask tensors [chunk_size, C]
+            label_chunks: List of label tensors [chunk_size]
+        """
+        self.activation_chunks = activation_chunks
+        self.mask_chunks = mask_chunks
+        self.label_chunks = label_chunks
+
+        # Build index mapping: (chunk_idx, sample_idx_in_chunk)
+        self.index_map = []
+        self.class_to_indices = defaultdict(list)
+
+        global_idx = 0
+        for chunk_idx, label_chunk in enumerate(label_chunks):
+            for sample_idx in range(len(label_chunk)):
+                self.index_map.append((chunk_idx, sample_idx))
+                label = label_chunk[sample_idx].item()
+                self.class_to_indices[label].append(global_idx)
+                global_idx += 1
+
+        self.total_samples = len(self.index_map)
+
+        print(f"\nChunkedActivationDataset initialized:")
+        print(f"  Total samples: {self.total_samples}")
+        print(f"  Number of chunks: {len(activation_chunks)}")
+        print(f"  Number of classes: {len(self.class_to_indices)}")
+
+    def __len__(self):
+        return self.total_samples
+
+    def __getitem__(self, idx):
+        """Get activation, mask, and label by global index."""
+        chunk_idx, sample_idx = self.index_map[idx]
+
+        activation = self.activation_chunks[chunk_idx][sample_idx]
+        mask = self.mask_chunks[chunk_idx][sample_idx]
+        label = self.label_chunks[chunk_idx][sample_idx]
+
+        return activation, mask, label
+
+
+class ClassBalancedBatchSampler(Sampler):
+    """Samples batches ensuring all classes are represented in each batch.
+
+    This ensures that each mini-batch contains samples from diverse classes,
+    which helps with learning discriminative features.
+    """
+
+    def __init__(self, class_to_indices: Dict[int, List[int]],
+                 batch_size: int,
+                 drop_last: bool = True):
+        self.class_to_indices = class_to_indices
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.num_classes = len(class_to_indices)
+
+        # Calculate samples per class per batch
+        self.samples_per_class = max(1, batch_size // self.num_classes)
+        self.actual_batch_size = self.samples_per_class * self.num_classes
+
+        print(f"\nClassBalancedBatchSampler:")
+        print(f"  Batch size: {batch_size} -> {self.actual_batch_size} (balanced)")
+        print(f"  Samples per class per batch: {self.samples_per_class}")
+        print(f"  Number of classes: {self.num_classes}")
+
+    def __iter__(self):
+        # Shuffle indices within each class
+        class_indices = {
+            cls: np.random.permutation(indices).tolist()
+            for cls, indices in self.class_to_indices.items()
+        }
+
+        # Determine number of batches
+        min_samples = min(len(indices) for indices in class_indices.values())
+        num_batches = min_samples // self.samples_per_class
+
+        for batch_idx in range(num_batches):
+            batch = []
+            for cls in sorted(class_indices.keys()):
+                start = batch_idx * self.samples_per_class
+                end = start + self.samples_per_class
+                batch.extend(class_indices[cls][start:end])
+
+            # Shuffle within batch
+            np.random.shuffle(batch)
+            yield batch
+
+    def __len__(self):
+        min_samples = min(len(indices) for indices in self.class_to_indices.values())
+        return min_samples // self.samples_per_class
 
 
 # ==========================================
@@ -707,7 +827,7 @@ def main():
         device=device
     )
 
-    X, masks = extractor.collect_activation_maps_chunked(
+    activation_chunks, mask_chunks, label_chunks = extractor.collect_activation_maps_chunked(
         data_loader,
         normalize=True,
         chunk_size=ACTIVATION_CHUNK_SIZE
@@ -732,6 +852,7 @@ def main():
     print(f"  Top-K: {TOP_K}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Learning Rate: {args.lr}")
+    print(f"  Batch Size: {args.batch_size}")
 
     csae_model = MultiChannelConvSAE(
         in_channels=INPUT_CHANNELS,
@@ -745,8 +866,22 @@ def main():
     compact_loss_fn = SpatialCompactnessLoss().to(device)
     channel_sparsity_loss_fn = FeatureChannelSparsityLoss().to(device)
 
-    train_dataset = TensorDataset(X, masks)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    # Create memory-efficient chunked dataset
+    train_dataset = ChunkedActivationDataset(
+        activation_chunks=activation_chunks,
+        mask_chunks=mask_chunks,
+        label_chunks=label_chunks
+    )
+
+    # Create class-balanced batch sampler
+    batch_sampler = ClassBalancedBatchSampler(
+        class_to_indices=train_dataset.class_to_indices,
+        batch_size=args.batch_size,
+        drop_last=True
+    )
+
+    # DataLoader with batch sampler (no shuffle when using custom sampler)
+    train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
 
     logs = {
         "total_loss": [], "recon_loss": [], "l1_loss": [],
@@ -763,9 +898,10 @@ def main():
         epoch_metrics = {k: 0 for k in logs.keys()}
         n_batches = 0
 
-        for batch_idx, (batch_acts, batch_masks) in enumerate(train_loader):
+        for batch_idx, (batch_acts, batch_masks, batch_labels) in enumerate(train_loader):
             batch_acts = batch_acts.to(device)
             batch_masks = batch_masks.to(device)
+            # batch_labels available but not used in unsupervised training
 
             optimizer.zero_grad()
 
