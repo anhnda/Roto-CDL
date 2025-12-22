@@ -1098,15 +1098,27 @@ def main():
         label_chunks=label_chunks
     )
 
-    # Create class-balanced batch sampler
-    batch_sampler = ClassBalancedBatchSampler(
-        class_to_indices=train_dataset.class_to_indices,
-        batch_size=args.batch_size,
-        drop_last=True
-    )
+    # Use class-balanced sampling only for small datasets (< 100 classes)
+    # For ImageNet-1k (1000 classes), use regular random sampling
+    num_classes = len(train_dataset.class_to_indices)
 
-    # DataLoader with batch sampler (no shuffle when using custom sampler)
-    train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
+    if num_classes <= 100:
+        print(f"\nUsing class-balanced batch sampling ({num_classes} classes)")
+        batch_sampler = ClassBalancedBatchSampler(
+            class_to_indices=train_dataset.class_to_indices,
+            batch_size=args.batch_size,
+            drop_last=True
+        )
+        train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
+    else:
+        print(f"\nUsing random sampling ({num_classes} classes, too many for class balancing)")
+        print(f"  Actual batch size: {args.batch_size}")
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            drop_last=True
+        )
 
     logs = {
         "total_loss": [], "recon_loss": [], "l1_loss": [],
