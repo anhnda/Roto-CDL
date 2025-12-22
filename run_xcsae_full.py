@@ -19,10 +19,10 @@ Dataset:
 - Caches sampled dataset to /data/imagenet1k_sampled for reuse
 
 Usage:
-    # ResNet50 (default)
+    # ResNet50 (default, auto-adjusted batch_size=16)
     python run_xcsae_full.py
 
-    # ResNet18
+    # ResNet18 (auto-adjusted batch_size=32)
     python run_xcsae_full.py --model resnet18
 
     # VGG16
@@ -34,11 +34,20 @@ Usage:
     # Custom target layer for ResNet50
     python run_xcsae_full.py --model resnet50 --target_layer layer2
 
+    # Gradient accumulation (batch_size=8, accumulation=4, effective=32)
+    python run_xcsae_full.py --model resnet50 --batch_size 8 --accumulation_steps 4
+
     # Force resample dataset
     python run_xcsae_full.py --force_resample
 
     # Force re-extract activations (ignore cache)
     python run_xcsae_full.py --force_reextract
+
+Memory Management:
+    - Batch size is auto-adjusted based on model size
+    - Use --accumulation_steps to train with larger effective batch sizes
+    - ResNet50: default batch_size=16 (fits on 16GB GPU)
+    - For OOM errors, reduce batch_size or increase accumulation_steps
 """
 
 import torch
@@ -977,10 +986,21 @@ def main():
                        help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3,
                        help='Learning rate')
-    parser.add_argument('--batch_size', type=int, default=64,
-                       help='Training batch size')
+    parser.add_argument('--batch_size', type=int, default=None,
+                       help='Training batch size (auto-adjusted if not specified)')
+    parser.add_argument('--accumulation_steps', type=int, default=1,
+                       help='Gradient accumulation steps (default: 1, no accumulation)')
 
     args = parser.parse_args()
+
+    # Auto-adjust batch size based on model if not specified
+    if args.batch_size is None:
+        if args.model == 'resnet50':
+            args.batch_size = 16  # Large model, small batches
+        elif args.model == 'vgg16':
+            args.batch_size = 16  # Large model
+        else:
+            args.batch_size = 32  # ResNet18, EfficientNet
 
     print("="*80)
     print(f"Multi-Channel ConvSAE Training on Full ImageNet-1k")
@@ -1038,6 +1058,9 @@ def main():
     LAMBDA_COMPACT = 0.01
     LAMBDA_CHANNEL_SPARSITY = 0.0
 
+    # Calculate effective batch size
+    effective_batch_size = args.batch_size * args.accumulation_steps
+
     print(f"\nTraining Configuration:")
     print(f"  Model: {args.model.upper()}")
     print(f"  Target Layer: {extractor.target_layer_name}")
@@ -1046,7 +1069,15 @@ def main():
     print(f"  Top-K: {TOP_K}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Learning Rate: {args.lr}")
-    print(f"  Batch Size: {args.batch_size}")
+    print(f"  Batch Size: {args.batch_size} (GPU)")
+    if args.accumulation_steps > 1:
+        print(f"  Accumulation Steps: {args.accumulation_steps}")
+        print(f"  Effective Batch Size: {effective_batch_size}")
+
+    # Memory info
+    if torch.cuda.is_available():
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"  GPU Memory: {gpu_mem:.1f} GB")
 
     csae_model = MultiChannelConvSAE(
         in_channels=INPUT_CHANNELS,
@@ -1091,16 +1122,17 @@ def main():
     for epoch in range(args.epochs):
         epoch_metrics = {k: 0 for k in logs.keys()}
         n_batches = 0
+        optimizer.zero_grad()  # Zero gradients at start of epoch
 
         for batch_idx, (batch_acts, batch_masks, batch_labels) in enumerate(train_loader):
             batch_acts = batch_acts.to(device)
             batch_masks = batch_masks.to(device)
             # batch_labels available but not used in unsupervised training
 
-            optimizer.zero_grad()
-
+            # Forward pass
             reconstruction, sparse_features = csae_model(batch_acts, use_topk=True)
 
+            # Compute losses
             loss_recon = masked_reconstruction_loss(reconstruction, batch_acts, batch_masks)
             loss_l1 = sparse_features.abs().mean()
             loss_lateral = lat_inhib_loss(sparse_features)
@@ -1113,16 +1145,27 @@ def main():
                    LAMBDA_COMPACT * loss_compact +
                    LAMBDA_CHANNEL_SPARSITY * loss_channel_sparsity)
 
+            # Scale loss for gradient accumulation
+            loss = loss / args.accumulation_steps
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(csae_model.parameters(), max_norm=1.0)
-            optimizer.step()
 
-            csae_model.normalize_decoder_weights()
+            # Update weights every accumulation_steps
+            if (batch_idx + 1) % args.accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(csae_model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                csae_model.normalize_decoder_weights()
 
+                # Clear GPU cache periodically
+                if torch.cuda.is_available() and (batch_idx + 1) % (args.accumulation_steps * 10) == 0:
+                    torch.cuda.empty_cache()
+
+            # Logging (scale loss back for display)
             with torch.no_grad():
                 active_pct = (sparse_features > 0).float().mean().item() * 100
+                displayed_loss = loss.item() * args.accumulation_steps  # Scale back for display
 
-                logs["total_loss"].append(loss.item())
+                logs["total_loss"].append(displayed_loss)
                 logs["recon_loss"].append(loss_recon.item())
                 logs["l1_loss"].append(loss_l1.item())
                 logs["lateral_loss"].append(loss_lateral.item())
@@ -1135,8 +1178,9 @@ def main():
                 n_batches += 1
 
             if batch_idx % 20 == 0:
+                displayed_loss = loss.item() * args.accumulation_steps
                 print(f"\rEpoch {epoch+1}/{args.epochs} [{batch_idx}/{len(train_loader)}] "
-                      f"Loss: {loss.item():.4f} | Recon: {loss_recon.item():.4f} | "
+                      f"Loss: {displayed_loss:.4f} | Recon: {loss_recon.item():.4f} | "
                       f"Active: {active_pct:.1f}%", end="")
 
         avg_metrics = {k: v / n_batches for k, v in epoch_metrics.items()}
