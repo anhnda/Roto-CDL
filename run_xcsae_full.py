@@ -36,6 +36,9 @@ Usage:
 
     # Force resample dataset
     python run_xcsae_full.py --force_resample
+
+    # Force re-extract activations (ignore cache)
+    python run_xcsae_full.py --force_reextract
 """
 
 import torch
@@ -75,7 +78,7 @@ from full_classes import IMAGENET2012_CLASSES
 # Paths
 IMAGENET_RAW_DIR = Path("/data/imagenet_raw/data")
 IMAGENET_SAMPLED_DIR = Path("/data/imagenet1k_sampled")
-CACHE_DIR = Path("cache_activations")
+ACTIVATION_CACHE_DIR = Path("cache_activations")
 
 # Sampling parameters
 IMAGES_PER_CLASS = 50  # 50 images × 1000 classes = 50,000 images
@@ -371,10 +374,12 @@ class MultiModelActivationExtractor:
     """Extracts activation channels from various backbone models WITHOUT masking."""
 
     def __init__(self, model_name: str = 'resnet18', target_layer: str = None,
-                 device='cuda', cumulative_threshold=0.85):
+                 device='cuda', cumulative_threshold=0.85, cache_dir: Path = None):
         self.device = device
         self.cumulative_threshold = cumulative_threshold
         self.model_name = model_name
+        self.cache_dir = cache_dir or ACTIVATION_CACHE_DIR
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Get model configuration
         if model_name not in MODEL_CONFIGS:
@@ -388,6 +393,7 @@ class MultiModelActivationExtractor:
         print(f"{'='*80}")
         print(f"Model: {config['description']}")
         print(f"Target layer: {self.target_layer_name}")
+        print(f"Cache directory: {self.cache_dir}")
 
         # Load model
         self.model = config['model_fn']().to(device)
@@ -489,18 +495,120 @@ class MultiModelActivationExtractor:
 
         return channel_mask, num_selected
 
+    def _generate_cache_key(self, num_samples: int, chunk_size: int) -> str:
+        """Generate a unique cache key based on extraction configuration."""
+        # Create a string with all relevant parameters
+        config_str = (
+            f"{self.model_name}_"
+            f"{self.target_layer_name}_"
+            f"thresh{self.cumulative_threshold}_"
+            f"samples{num_samples}_"
+            f"chunk{chunk_size}"
+        )
+
+        # Clean up special characters for filename
+        config_str = config_str.replace('[', '_').replace(']', '').replace('.', 'p')
+
+        return config_str
+
+    def _get_cache_path(self, cache_key: str) -> Path:
+        """Get the cache file path for a given cache key."""
+        return self.cache_dir / f"activations_{cache_key}.pkl"
+
+    def _save_activations_to_cache(self, cache_key: str,
+                                   activation_chunks: List[torch.Tensor],
+                                   mask_chunks: List[torch.Tensor],
+                                   label_chunks: List[torch.Tensor],
+                                   metadata: Dict):
+        """Save extracted activations to cache."""
+        cache_path = self._get_cache_path(cache_key)
+
+        print(f"\nSaving activations to cache...")
+        print(f"  Cache path: {cache_path}")
+
+        cache_data = {
+            'activation_chunks': activation_chunks,
+            'mask_chunks': mask_chunks,
+            'label_chunks': label_chunks,
+            'metadata': metadata
+        }
+
+        joblib.dump(cache_data, cache_path, compress=3)
+
+        # Calculate cache size
+        cache_size_mb = cache_path.stat().st_size / (1024 * 1024)
+        print(f"  Cache size: {cache_size_mb:.1f} MB")
+        print(f"✓ Activations cached!")
+
+    def _load_activations_from_cache(self, cache_key: str) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor], Dict]:
+        """Load cached activations."""
+        cache_path = self._get_cache_path(cache_key)
+
+        print(f"\n{'='*80}")
+        print(f"Loading cached activations...")
+        print(f"{'='*80}")
+        print(f"  Cache path: {cache_path}")
+
+        cache_data = joblib.load(cache_path)
+
+        activation_chunks = cache_data['activation_chunks']
+        mask_chunks = cache_data['mask_chunks']
+        label_chunks = cache_data['label_chunks']
+        metadata = cache_data['metadata']
+
+        total_samples = sum(chunk.shape[0] for chunk in activation_chunks)
+        cache_size_mb = cache_path.stat().st_size / (1024 * 1024)
+
+        print(f"  Total samples: {total_samples}")
+        print(f"  Number of chunks: {len(activation_chunks)}")
+        print(f"  Cache size: {cache_size_mb:.1f} MB")
+        print(f"✓ Cached activations loaded!")
+
+        return activation_chunks, mask_chunks, label_chunks, metadata
+
+    def _check_cache_exists(self, cache_key: str) -> bool:
+        """Check if cache exists for the given cache key."""
+        cache_path = self._get_cache_path(cache_key)
+        return cache_path.exists()
+
     def collect_activation_maps_chunked(
         self,
         data_loader: DataLoader,
         normalize: bool = True,
-        chunk_size: int = 100
+        chunk_size: int = 100,
+        use_cache: bool = True
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
-        """Collect activation maps in memory-efficient chunks.
+        """Collect activation maps in memory-efficient chunks with caching support.
+
+        Args:
+            data_loader: DataLoader for the dataset
+            normalize: Whether to apply robust normalization
+            chunk_size: Number of samples per chunk
+            use_cache: If True, load from cache if available, save to cache after extraction
 
         Returns:
             Tuple of (activation_chunks, mask_chunks, label_chunks)
             Each is a list of tensors to avoid memory explosion from concatenation.
         """
+        # Calculate total samples for cache key
+        num_samples = len(data_loader.dataset)
+        cache_key = self._generate_cache_key(num_samples, chunk_size)
+
+        # Check if cache exists and use_cache is True
+        if use_cache and self._check_cache_exists(cache_key):
+            activation_chunks, mask_chunks, label_chunks, metadata = self._load_activations_from_cache(cache_key)
+
+            # Verify metadata matches current configuration
+            if (metadata.get('normalized') == normalize and
+                metadata.get('cumulative_threshold') == self.cumulative_threshold):
+                print(f"  Metadata validated - cache is compatible!")
+                return activation_chunks, mask_chunks, label_chunks
+            else:
+                print(f"  WARNING: Cache metadata mismatch, re-extracting...")
+                print(f"    Cached normalized={metadata.get('normalized')}, current={normalize}")
+                print(f"    Cached threshold={metadata.get('cumulative_threshold')}, current={self.cumulative_threshold}")
+
+        # Cache miss or invalid - extract activations
         all_activations = []
         all_masks = []
         all_labels = []
@@ -513,6 +621,7 @@ class MultiModelActivationExtractor:
         print(f"\nCollecting activation maps (chunked processing)...")
         print(f"  Chunk size: {chunk_size} images")
         print(f"  GradCAM threshold: {self.cumulative_threshold * 100:.0f}%")
+        print(f"  Caching: {'Enabled' if use_cache else 'Disabled'}")
 
         for images, labels in tqdm(data_loader, desc="Extracting activations"):
             for i in range(images.size(0)):
@@ -576,6 +685,29 @@ class MultiModelActivationExtractor:
 
             # Sample range from first chunk
             print(f"  Normalized range (sample from chunk 0): [{all_activations[0].min():.4f}, {all_activations[0].max():.4f}]")
+
+        # Save to cache if enabled
+        if use_cache:
+            metadata = {
+                'model_name': self.model_name,
+                'target_layer': self.target_layer_name,
+                'cumulative_threshold': self.cumulative_threshold,
+                'normalized': normalize,
+                'num_channels': self.num_channels,
+                'spatial_size': self.spatial_size,
+                'avg_channels_selected': avg_selected,
+                'std_channels_selected': std_selected,
+                'total_samples': total_samples,
+                'num_chunks': len(all_activations)
+            }
+
+            self._save_activations_to_cache(
+                cache_key=cache_key,
+                activation_chunks=all_activations,
+                mask_chunks=all_masks,
+                label_chunks=all_labels,
+                metadata=metadata
+            )
 
         return all_activations, all_masks, all_labels
 
@@ -780,6 +912,8 @@ def main():
                        help='Target layer name (default: model-specific default)')
     parser.add_argument('--force_resample', action='store_true',
                        help='Force resampling of dataset')
+    parser.add_argument('--force_reextract', action='store_true',
+                       help='Force re-extraction of activations (ignore cache)')
     parser.add_argument('--epochs', type=int, default=15,
                        help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3,
@@ -830,7 +964,8 @@ def main():
     activation_chunks, mask_chunks, label_chunks = extractor.collect_activation_maps_chunked(
         data_loader,
         normalize=True,
-        chunk_size=ACTIVATION_CHUNK_SIZE
+        chunk_size=ACTIVATION_CHUNK_SIZE,
+        use_cache=not args.force_reextract  # Cache enabled unless --force_reextract is set
     )
 
     # Setup training
