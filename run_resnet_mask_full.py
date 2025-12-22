@@ -728,12 +728,21 @@ if __name__ == "__main__":
     INPUT_CHANNELS = extractor.num_channels
     HIDDEN_DIM = INPUT_CHANNELS * 8
     KERNEL_SIZE = 1
-    TOP_K = int(HIDDEN_DIM * 0.015)
+    # TOP_K = int(HIDDEN_DIM * 0.015)
+    # LAMBDA_L1 = 3.0
+    # LAMBDA_LAT = 0.01
+    # LAMBDA_COMPACT = 0.01
+    # LAMBDA_CHANNEL_SPARSITY = 0.0
 
-    LAMBDA_L1 = 3.0
-    LAMBDA_LAT = 0.01
-    LAMBDA_COMPACT = 0.01
-    LAMBDA_CHANNEL_SPARSITY = 0.0
+    # LR = 1e-3
+    # WEIGHT_DECAY = 1e-5
+    # EPOCHS = 15
+
+    TOP_K = int(HIDDEN_DIM * 0.15)  # 15% instead of 1.5% → ~300 features instead of 30                                     
+    LAMBDA_L1 = 0.3  # Instead of 3.0 - reduce by 10x           
+    LAMBDA_LAT = 0.01                                           
+    LAMBDA_COMPACT = 0.01                                       
+    LAMBDA_CHANNEL_SPARSITY = 0.0 
 
     LR = 1e-3
     WEIGHT_DECAY = 1e-5
