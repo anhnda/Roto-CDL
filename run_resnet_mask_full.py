@@ -54,7 +54,7 @@ from full_classes import IMAGENET2012_CLASSES
 # ==========================================
 
 # Paths
-IMAGENET_RAW_DIR = Path("/data/imagenet_raw")
+IMAGENET_RAW_DIR = Path("/data/imagenet_raw/data")
 IMAGENET_SAMPLED_DIR = Path("/data/imagenet1k_sampled")
 CACHE_DIR = Path("cache_activations")
 
