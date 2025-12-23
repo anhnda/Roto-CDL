@@ -1054,7 +1054,7 @@ def main():
     TOP_K = int(HIDDEN_DIM * 0.01)
 
     #LAMBDA_L1 = 0.3
-    LAMBDA_L1 = 0.5
+    LAMBDA_L1 = 0.3
     LAMBDA_LAT = 0.01
     LAMBDA_COMPACT = 0.01
     LAMBDA_CHANNEL_SPARSITY = 0.0
