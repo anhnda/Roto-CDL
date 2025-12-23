@@ -1051,9 +1051,10 @@ def main():
     INPUT_CHANNELS = extractor.num_channels
     HIDDEN_DIM = INPUT_CHANNELS * 8
     KERNEL_SIZE = 1
-    TOP_K = int(HIDDEN_DIM * 0.15)
+    TOP_K = int(HIDDEN_DIM * 0.1)
 
-    LAMBDA_L1 = 0.3
+    #LAMBDA_L1 = 0.3
+    LAMBDA_L1 = 0.5
     LAMBDA_LAT = 0.01
     LAMBDA_COMPACT = 0.01
     LAMBDA_CHANNEL_SPARSITY = 0.0
