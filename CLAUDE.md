@@ -1036,6 +1036,143 @@ After training, the following files are saved:
 
 ### Common Issues and Solutions
 
+#### Out of Memory (OOM) Errors
+
+**Symptom**: `RuntimeError: CUDA out of memory` or `torch.cuda.OutOfMemoryError`
+
+**Memory Consumption Factors** (in order of impact):
+
+1. **Batch Size** (Primary Factor)
+   - Memory scales linearly with batch size
+   - **Default**: 32 (requires ~12-16GB GPU for ResNet50)
+   - **Recommendation**: Start with batch_size=8, increase if no OOM
+
+2. **Backbone Model**
+   - ResNet50: ~23M params, requires ~4-6GB base memory
+   - ResNet18: ~11M params, requires ~2-3GB base memory
+   - VGG16: ~138M params, requires ~8-10GB base memory
+   - **Recommendation**: Use ResNet18 for limited GPU memory
+
+3. **Number of Prototypes**
+   - Memory for prototype distance computation: O(B × num_prototypes × H × W)
+   - Default: 2000 prototypes (2 per class × 1000)
+   - **Recommendation**: Keep at 2 per class unless GPU has >24GB memory
+
+4. **Image Resolution**
+   - Default: 224×224 (standard ImageNet)
+   - Activation map size: 14×14 for layer3
+   - **Not recommended to change** (pretrained weights expect 224×224)
+
+**Quick Fixes by GPU Memory**:
+
+| GPU Memory | Model      | Batch Size | Prototypes/Class | Command |
+|-----------|-----------|------------|------------------|---------|
+| 8GB       | ResNet18  | 8          | 2                | `--model resnet18 --batch_size 8` |
+| 12GB      | ResNet18  | 16         | 2                | `--model resnet18 --batch_size 16` |
+| 12GB      | ResNet50  | 8          | 2                | `--model resnet50 --batch_size 8` |
+| 16GB      | ResNet50  | 16         | 2                | `--model resnet50 --batch_size 16` |
+| 24GB      | ResNet50  | 32         | 2                | `--model resnet50 --batch_size 32` |
+| 24GB      | ResNet50  | 16         | 5                | `--model resnet50 --batch_size 16 --num_prototypes_per_class 5` |
+
+**Step-by-Step OOM Debugging**:
+
+1. **First, try reducing batch size**:
+   ```bash
+   # If batch_size=32 fails, try:
+   python run_protopnet_full.py --batch_size 16
+
+   # Still OOM? Try:
+   python run_protopnet_full.py --batch_size 8
+
+   # Extreme case (very limited memory):
+   python run_protopnet_full.py --batch_size 4
+   ```
+
+2. **Second, switch to smaller backbone**:
+   ```bash
+   # If ResNet50 fails, use ResNet18:
+   python run_protopnet_full.py --model resnet18 --batch_size 16
+   ```
+
+3. **Third, reduce prototypes per class** (only if still OOM):
+   ```bash
+   # Default is 2, can reduce to 1 (not recommended for quality):
+   python run_protopnet_full.py --model resnet18 --batch_size 8 --num_prototypes_per_class 1
+   ```
+
+4. **Monitor GPU memory during training**:
+   ```bash
+   # In another terminal, watch GPU usage:
+   watch -n 0.5 nvidia-smi
+   ```
+
+**OOM During Prototype Projection (Push)**:
+
+If OOM occurs specifically during the push operation:
+
+```python
+# In run_protopnet_full.py, modify push_prototypes() function:
+# Process images in smaller batches during push
+
+# Current code processes full batch, change to:
+for images, labels in tqdm(dataloader, desc="Finding nearest patches"):
+    # Split batch into smaller chunks if needed
+    chunk_size = 8  # Process 8 images at a time
+    for i in range(0, images.size(0), chunk_size):
+        chunk_images = images[i:i+chunk_size].to(device)
+        chunk_labels = labels[i:i+chunk_size].to(device)
+        # ... rest of code
+```
+
+**Memory Optimization Tips**:
+
+1. **Clear cache periodically**:
+   - Already implemented in the code
+   - `torch.cuda.empty_cache()` called during training
+
+2. **Use mixed precision training** (for compatible GPUs):
+   ```python
+   # Add to training loop:
+   from torch.cuda.amp import autocast, GradScaler
+   scaler = GradScaler()
+
+   with autocast():
+       logits, _, min_distances, _ = model(images, return_distances=True)
+       loss = ...
+
+   scaler.scale(loss).backward()
+   scaler.step(optimizer)
+   scaler.update()
+   ```
+
+3. **Gradient accumulation** (simulate larger batch with less memory):
+   ```python
+   # Effective batch size = batch_size × accumulation_steps
+   # E.g., batch_size=8, accumulation_steps=4 → effective batch_size=32
+
+   # Add to code:
+   accumulation_steps = 4
+   for batch_idx, (images, labels) in enumerate(dataloader):
+       loss = ... / accumulation_steps
+       loss.backward()
+
+       if (batch_idx + 1) % accumulation_steps == 0:
+           optimizer.step()
+           optimizer.zero_grad()
+   ```
+
+**Expected Memory Usage** (approximate):
+
+| Configuration | GPU Memory Required |
+|--------------|---------------------|
+| ResNet18, batch=8, proto=2/class | ~6 GB |
+| ResNet18, batch=16, proto=2/class | ~8 GB |
+| ResNet50, batch=8, proto=2/class | ~10 GB |
+| ResNet50, batch=16, proto=2/class | ~14 GB |
+| ResNet50, batch=32, proto=2/class | ~20 GB |
+
+#### Training Issues
+
 **Issue**: Cluster loss not decreasing
 - **Cause**: Learning rate too low for prototypes
 - **Solution**: Increase prototype learning rate (try 5·lr instead of 3·lr)

@@ -21,12 +21,37 @@ Dataset:
 - Samples 50 images per class from training set (50,000 total)
 - Caches sampled dataset to /data/imagenet1k_sampled for reuse
 
-Usage:
-    # ResNet50 (default)
-    python run_protopnet_full.py
+Memory Usage Guide (for OOM errors):
+    Memory consumption depends on:
+    1. Batch size (most direct impact)
+    2. Number of prototypes (affects distance computation)
+    3. Backbone model (ResNet50 > ResNet18)
+    4. Image resolution (224×224 default)
 
-    # ResNet18
-    python run_protopnet_full.py --model resnet18
+    Recommended configurations by GPU memory:
+
+    8GB GPU (e.g., RTX 2080):
+        python run_protopnet_full.py --model resnet18 --batch_size 8 --num_prototypes_per_class 2
+
+    12GB GPU (e.g., RTX 3080):
+        python run_protopnet_full.py --model resnet18 --batch_size 16 --num_prototypes_per_class 2
+        python run_protopnet_full.py --model resnet50 --batch_size 8 --num_prototypes_per_class 2
+
+    16GB GPU (e.g., RTX 4080, V100):
+        python run_protopnet_full.py --model resnet50 --batch_size 16 --num_prototypes_per_class 2
+
+    24GB+ GPU (e.g., RTX 3090, A100):
+        python run_protopnet_full.py --model resnet50 --batch_size 32 --num_prototypes_per_class 2
+
+Usage:
+    # Minimal memory (8GB GPU)
+    python run_protopnet_full.py --model resnet18 --batch_size 8
+
+    # ResNet18 with moderate batch size
+    python run_protopnet_full.py --model resnet18 --batch_size 16
+
+    # ResNet50 (requires more memory)
+    python run_protopnet_full.py --model resnet50 --batch_size 8
 
     # Custom number of prototypes per class
     python run_protopnet_full.py --num_prototypes_per_class 10
