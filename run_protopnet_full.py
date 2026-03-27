@@ -554,18 +554,18 @@ def warm_only(model):
         p.requires_grad = True
     model.prototype_vectors.requires_grad = True
     for p in model.last_layer.parameters():
-        p.requires_grad = False
+        p.requires_grad = True  # FIX: Last layer must be trainable during warm-up
 
 
 def joint(model):
-    """Set requires_grad=True for all layers except last layer."""
+    """Set requires_grad=True for all layers including last layer."""
     for p in model.conv_features.parameters():
         p.requires_grad = True
     for p in model.add_on_layers.parameters():
         p.requires_grad = True
     model.prototype_vectors.requires_grad = True
     for p in model.last_layer.parameters():
-        p.requires_grad = False
+        p.requires_grad = True  # FIX: Last layer must be trainable during joint training
 
 
 def last_only(model):
@@ -944,8 +944,9 @@ def main():
     print(f"\n--- Warm-up Phase ({args.warm_epochs} epochs) ---")
     warm_only(model)
     optimizer_warm = optim.Adam([
-        {'params': model.add_on_layers.parameters(), 'lr': args.lr},
-        {'params': [model.prototype_vectors], 'lr': 3 * args.lr}
+        {'params': model.add_on_layers.parameters(), 'lr': 3e-3},  # FIX: Use 3e-3 as in paper
+        {'params': [model.prototype_vectors], 'lr': 3e-3},          # FIX: Use 3e-3 as in paper
+        {'params': model.last_layer.parameters(), 'lr': args.lr}
     ])
 
     for epoch in range(args.warm_epochs):
@@ -965,13 +966,14 @@ def main():
         for key in logs:
             logs[key].append(metrics[key])
 
-    # Stage 1b: Joint training (train all layers except last)
+    # Stage 1b: Joint training (train all layers including last)
     print(f"\n--- Joint Training Phase ({args.joint_epochs} epochs) ---")
     joint(model)
     optimizer_joint = optim.Adam([
-        {'params': model.conv_features.parameters(), 'lr': args.lr / 10},
-        {'params': model.add_on_layers.parameters(), 'lr': args.lr},
-        {'params': [model.prototype_vectors], 'lr': 3 * args.lr}
+        {'params': model.conv_features.parameters(), 'lr': args.lr / 10},  # Keep 1e-5 for backbone
+        {'params': model.add_on_layers.parameters(), 'lr': 3e-3},          # FIX: Use 3e-3 as in paper
+        {'params': [model.prototype_vectors], 'lr': 3e-3},                 # FIX: Use 3e-3 as in paper
+        {'params': model.last_layer.parameters(), 'lr': args.lr}
     ])
 
     for epoch in range(args.joint_epochs):
