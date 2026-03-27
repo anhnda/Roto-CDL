@@ -56,6 +56,11 @@ python check_same_class_dual_csae.py --compare_classes tench church parachute --
 # View top activation maps with deconvolution
 python view_top_activation.py --image_path data/imagenette/tench/n01440764_1.JPEG
 python view_top_activation.py --class_name tench --num_images 3
+
+# Run ProtoPNet training on full ImageNet-1k (interpretable classification)
+python run_protopnet_full.py  # ResNet50, 2 prototypes/class
+python run_protopnet_full.py --model resnet18 --num_prototypes_per_class 5
+python run_protopnet_full.py --warm_epochs 10 --joint_epochs 30
 ```
 
 ### Working with Jupyter Notebooks
@@ -740,3 +745,327 @@ When adjusting ConvSAE training (`run_csae.py`):
 - `lambda_lat`: Higher values = stronger lateral inhibition, prevents blob-like activations (default: 0.02)
 - Training will automatically warn you if sparsity is outside the target range
 - If reconstruction loss plateaus early while sparsity is good, the model has converged successfully
+
+## Prototypical Part Network (ProtoPNet) Implementation
+
+The `run_protopnet_full.py` script implements the **"This Looks Like That"** interpretable classification approach from Chen et al. (NeurIPS 2019). Unlike the original paper which focused on fine-grained classification (birds, cars), this implementation is designed for **full ImageNet-1k** with prototypes for ALL classes, enabling direct comparison with ConvSAE and Dual ConvSAE.
+
+### Key Differences from Original Paper
+
+**Original ProtoPNet (Chen et al., 2019)**:
+- Designed for fine-grained classification (CUB-200-2011 birds: 200 classes, Stanford Cars: 196 classes)
+- 10 prototypes per class
+- Total prototypes: 2000 (200 classes × 10) or 1960 (196 classes × 10)
+- Cropped images with bounding boxes
+- Focused on interpretability for specific domains
+
+**Our Implementation (ProtoPNet Full)**:
+- **Designed for ImageNet-1k (1000 classes)**
+- **Prototypes for ALL classes** (not class-specific like original)
+- Default: 2 prototypes per class = 2000 total prototypes (configurable)
+- Full images (no bounding boxes required)
+- Enables comparison with ConvSAE/Dual ConvSAE feature learning
+- Same architecture but scaled for large-scale classification
+
+### Architecture Overview
+
+```
+Input Image
+    ↓
+Convolutional Backbone (f)
+  (ResNet50/ResNet18/VGG16 pretrained on ImageNet)
+    ↓
+Add-on Layers (1×1 conv)
+  (Sigmoid activation on last layer)
+    ↓
+Prototype Layer (gp)
+  - Learns m prototypes P = {p_j}
+  - Each prototype: 1×1×D (D = feature channels)
+  - Computes L2 distance to all patches
+  - Converts distance to similarity score
+  - Global max pooling → similarity score per prototype
+    ↓
+Fully Connected Layer (h) [no bias]
+  - Weights connect prototypes to classes
+  - w_{k,j} = 1 if prototype j ∈ class k
+  - w_{k,j} ≈ 0 for prototypes not in class k (learned via L1)
+    ↓
+Output Logits (1000 classes)
+```
+
+### Prototype Layer Details
+
+For each prototype p_j and input features z = f(x):
+
+1. **Distance Computation**: Compute squared L2 distance to all patches
+   ```
+   d²(z, p_j) = ||z - p_j||² = ||z||² + ||p_j||² - 2·z^T·p_j
+   ```
+
+2. **Similarity Conversion**:
+   ```
+   similarity = log((d² + 1) / (d² + ε))
+   ```
+   - Monotonically decreasing with distance
+   - High similarity = low distance
+
+3. **Global Max Pooling**: Take maximum similarity across all spatial locations
+   ```
+   activation_j = max_{all patches} similarity(patch, p_j)
+   ```
+
+### Training Procedure (3 Stages)
+
+#### Stage 1: Joint Training (Warm + Joint Optimization)
+
+**Warm-up Phase** (default: 5 epochs):
+- Fix: Convolutional backbone
+- Train: Add-on layers + Prototypes
+- Goal: Initialize prototypes with reasonable values
+
+**Joint Phase** (default: 20 epochs):
+- Train: Convolutional backbone (small LR) + Add-on layers + Prototypes
+- Fix: Last layer weights
+  - w_{k,j} = 1.0 if prototype j belongs to class k
+  - w_{k,j} = -0.5 otherwise
+- Objective:
+  ```
+  Loss = CrossEntropy + λ_clst · Clst + λ_sep · Sep
+  ```
+
+**Cluster Loss (Clst)**:
+```
+Clst = (1/n) Σ_i min_{j: p_j ∈ P_{y_i}} min_{z ∈ patches} ||z - p_j||²
+```
+- Encourages each image to have patches close to its class prototypes
+- Pushes same-class images to cluster around class prototypes
+
+**Separation Loss (Sep)**:
+```
+Sep = -(1/n) Σ_i min_{j: p_j ∉ P_{y_i}} min_{z ∈ patches} ||z - p_j||²
+```
+- Encourages images to stay far from other-class prototypes
+- Negative sign: we minimize negative distance = maximize distance
+- Helps prototypes become class-discriminative
+
+#### Stage 2: Prototype Projection (Push)
+
+After joint training, project each prototype to the nearest training patch from its class:
+
+```python
+For each prototype p_j of class k:
+    1. Find all training images from class k
+    2. Compute distances from p_j to all patches in these images
+    3. Find the patch with minimum distance
+    4. Update p_j ← that patch
+```
+
+**Why this matters**:
+- Makes prototypes visualizable as actual image patches
+- Each prototype = real training patch, not abstract latent vector
+- Enables "this looks like that" explanations with concrete examples
+- Theorem 2.1 in paper: projection doesn't hurt accuracy if Clst is well-optimized
+
+#### Stage 3: Last Layer Optimization (Convex)
+
+Optimize last layer weights with L1 regularization:
+
+```
+Loss = CrossEntropy + λ_L1 · Σ_{k,j: p_j ∉ P_k} |w_{k,j}|
+```
+
+**Goal**: Make incorrect connections sparse
+- w_{k,j} should be ≈ 0 if prototype j doesn't belong to class k
+- Reduces negative reasoning: "this is class k because it's NOT like other classes"
+- Encourages positive reasoning: "this is class k because it looks like class k prototypes"
+
+### Usage Examples
+
+#### Basic Training (ResNet50, 2 prototypes/class)
+```bash
+python run_protopnet_full.py
+```
+
+Output:
+- Model: `protopnet_resnet50_p2_model.pkl` (full model)
+- Weights: `protopnet_resnet50_p2_model.pth` (state dict)
+- Logs: `protopnet_resnet50_p2_logs.png` (training curves)
+- Training info: `protopnet_resnet50_p2_training_info.pkl` (config + metrics)
+
+#### Custom Configuration
+```bash
+# ResNet18 with 5 prototypes per class
+python run_protopnet_full.py --model resnet18 --num_prototypes_per_class 5
+
+# Custom training schedule
+python run_protopnet_full.py \
+  --warm_epochs 10 \
+  --joint_epochs 30 \
+  --last_layer_epochs 20 \
+  --push_every 5
+
+# Adjust loss weights
+python run_protopnet_full.py \
+  --lambda_clst 0.8 \    # Cluster loss weight
+  --lambda_sep -0.08 \   # Separation loss weight (negative)
+  --lambda_l1 1e-4       # L1 regularization for last layer
+```
+
+### Hyperparameters
+
+**Model Architecture**:
+- `--model`: Backbone (resnet50, resnet18, vgg16)
+- `--num_prototypes_per_class`: Number of prototypes per class (default: 2)
+  - Total prototypes = 1000 × num_prototypes_per_class
+  - More prototypes = more expressive but slower
+
+**Training Schedule**:
+- `--warm_epochs`: Warm-up epochs (default: 5)
+  - Train only add-on layers + prototypes
+- `--joint_epochs`: Joint training epochs (default: 20)
+  - Train backbone + add-on + prototypes
+- `--last_layer_epochs`: Last layer optimization epochs (default: 10)
+- `--push_every`: Push prototypes every N epochs (default: 5)
+  - During joint training, periodically project prototypes
+
+**Optimization**:
+- `--lr`: Base learning rate (default: 1e-4)
+  - Backbone: lr/10
+  - Add-on layers: lr
+  - Prototypes: 3·lr (learn faster)
+- `--batch_size`: Training batch size (default: 32)
+
+**Loss Weights**:
+- `--lambda_clst`: Cluster loss weight (default: 0.8)
+  - Higher = stronger clustering
+  - Typical range: 0.5 - 1.0
+- `--lambda_sep`: Separation loss weight (default: -0.08)
+  - More negative = stronger separation
+  - Typical range: -0.1 to -0.05
+- `--lambda_l1`: L1 regularization for last layer (default: 1e-4)
+  - Higher = sparser incorrect connections
+  - Typical range: 1e-5 to 1e-3
+
+### Expected Training Behavior
+
+**Warm-up Phase** (epochs 1-5):
+- **Cluster Loss**: Should decrease rapidly (from ~100 to ~10)
+- **Separation Loss**: Should decrease (become more negative)
+- **Accuracy**: Should reach 20-40%
+- **Sign of success**: Prototypes start to capture class-specific patterns
+
+**Joint Training Phase** (epochs 6-25):
+- **Cross Entropy**: Decreases steadily
+- **Cluster Loss**: Continues decreasing (to ~1-5)
+- **Separation Loss**: Continues decreasing (more negative)
+- **Accuracy**: Should reach 60-75% on ImageNet-1k
+- **Sign of success**: After each push, accuracy should not drop significantly
+
+**Last Layer Optimization** (epochs 26-35):
+- **Cross Entropy**: Small decrease
+- **L1 Penalty**: Decreases as incorrect connections become sparse
+- **Accuracy**: May improve slightly (1-2%)
+- **Sign of success**: Most w_{k,j} for j ∉ P_k should be near 0
+
+### Interpretability: "This Looks Like That"
+
+**How to interpret predictions**:
+
+1. **Forward pass**: Get logits = h(gp(f(x)))
+2. **Prototype activations**: For each prototype, find activation score
+3. **Upsampling**: Upsample activation map to image size → find activated region
+4. **Visualization**: Show:
+   - Input image with bounding box around activated region
+   - Prototype image (training patch where prototype was pushed)
+   - Activation heatmap
+   - Similarity score
+5. **Reasoning**:
+   ```
+   "This image is class k because:
+   - This part (bounding box) looks like prototype p_j (similarity: 6.5)
+   - This part looks like prototype p_m (similarity: 4.2)
+   - ...
+   Total evidence for class k: Σ w_{k,j} · activation_j"
+   ```
+
+### Comparison with ConvSAE and Dual ConvSAE
+
+| Aspect | ProtoPNet | ConvSAE | Dual ConvSAE |
+|--------|-----------|---------|--------------|
+| **Learning** | Supervised (class labels) | Unsupervised | Semi-supervised |
+| **Prototypes** | Explicit (learned vectors) | Implicit (decoder weights) | Explicit (shared + class) |
+| **Interpretability** | Case-based reasoning | Feature reconstruction | Pathway separation |
+| **Number of Features** | 2000 (2/class × 1000) | 2048-8192 | 512 (shared + class) |
+| **Similarity Metric** | L2 distance in latent space | Reconstruction error | L2 distance + classification |
+| **Training Complexity** | 3-stage (complex) | Single-stage | Single-stage |
+| **Visualization** | Real image patches | Decoder weights | Decoder weights + class info |
+| **Use Case** | When interpretability is critical | When features are primary goal | When class separation is needed |
+
+**When to use ProtoPNet**:
+- Need human-interpretable explanations with concrete examples
+- Want case-based reasoning ("this looks like that")
+- Classification is the primary task
+- Have labeled training data
+
+**When to use ConvSAE/Dual ConvSAE**:
+- Want to learn features from activations
+- Need unsupervised or semi-supervised learning
+- Want to analyze feature usage across classes
+- Focus on representation learning rather than classification
+
+### Output Files
+
+After training, the following files are saved:
+
+1. **`protopnet_<model>_p<N>_model.pth`**: PyTorch state dict
+   - Use for loading weights: `model.load_state_dict(torch.load(...))`
+
+2. **`protopnet_<model>_p<N>_model.pkl`**: Full model (joblib)
+   - Use for inference: `model = joblib.load(...)`
+
+3. **`protopnet_<model>_p<N>_training_info.pkl`**: Training config and logs
+   ```python
+   info = joblib.load('protopnet_resnet50_p2_training_info.pkl')
+   print(info['config'])  # Model configuration
+   print(info['logs'])    # Training metrics per epoch
+   ```
+
+4. **`protopnet_<model>_p<N>_logs.png`**: Training curves (6 subplots)
+   - Total loss, Cross entropy, Cluster loss
+   - Separation loss, Training accuracy, Loss components
+
+### Common Issues and Solutions
+
+**Issue**: Cluster loss not decreasing
+- **Cause**: Learning rate too low for prototypes
+- **Solution**: Increase prototype learning rate (try 5·lr instead of 3·lr)
+
+**Issue**: Accuracy drops after prototype projection (push)
+- **Cause**: Cluster loss not well-optimized before push
+- **Solution**: Train longer before first push, or push less frequently
+
+**Issue**: Last layer has many non-zero incorrect connections
+- **Cause**: L1 penalty too weak
+- **Solution**: Increase `--lambda_l1` (try 1e-3 or 1e-2)
+
+**Issue**: Training very slow
+- **Cause**: Too many prototypes or large batch size
+- **Solution**: Reduce `--num_prototypes_per_class` or `--batch_size`
+
+**Issue**: Prototypes not class-discriminative
+- **Cause**: Separation loss too weak
+- **Solution**: Increase magnitude of `--lambda_sep` (make more negative, e.g., -0.1)
+
+### Advanced: Multi-Scale Prototypes
+
+The current implementation uses 1×1×D prototypes (point prototypes). To use larger spatial prototypes:
+
+```python
+# Modify in run_protopnet_full.py
+prototype_shape = (num_prototypes, channels, 3, 3)  # 3×3 prototypes
+```
+
+**Trade-offs**:
+- Larger prototypes: Capture more spatial context, slower computation
+- Smaller prototypes (1×1): Faster, more flexible, less spatial context
+- Original paper uses 1×1 for fine-grained tasks
