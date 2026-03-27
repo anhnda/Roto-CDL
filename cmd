@@ -1,3 +1,6 @@
+PROTOPNET: 
+python run_protopnet_full.py --model resnet50 --batch_size 8   
+
 ################################################################################
 # ImageNet-1k Multi-Model ConvSAE Commands
 # Updated: 2024 - ResNet50 is now the default backbone
