@@ -181,10 +181,6 @@ class ProtoPNet(nn.Module):
         # Connects prototype similarity scores to class logits
         self.last_layer = nn.Linear(self.num_prototypes, num_classes, bias=False)
 
-        # Initialize last layer weights
-        if init_weights:
-            self._initialize_weights()
-
         # Epsilon for numerical stability
         self.epsilon = 1e-4
 
@@ -195,6 +191,10 @@ class ProtoPNet(nn.Module):
             start_idx = k * num_prototypes_per_class
             end_idx = (k + 1) * num_prototypes_per_class
             self.prototype_class_identity[start_idx:end_idx] = k
+
+        # Initialize weights (must come after prototype_class_identity is created)
+        if init_weights:
+            self._initialize_weights()
 
     def _initialize_weights(self):
         """Initialize weights as described in the paper."""
